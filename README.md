@@ -1,344 +1,110 @@
-PrintMQTTify
-============
+# PrintMQTTify (ZJ-58 / ZJ-80 edition)
 
-PrintMQTTify is a Docker-based solution that bridges MQTT messages to a CUPS printer, allowing you to print messages from your MQTT broker seamlessly. This is particularly useful in smart home setups for automating printing tasks, such as printing shopping lists or event reminders directly from Home Assistant. This project provides an easy way to connect printers to your smart home system, such as Home Assistant, and send print commands using MQTT.
+A Docker-based bridge between MQTT and a CUPS printer, aimed at cheap ESC/POS thermal receipt printers (Zijiang **ZJ-58** / **ZJ-80** and compatible clones). Publish a message to an MQTT topic — from Home Assistant, Node-RED, or anything else — and it prints.
 
-* * * * *
+This is a fork of [Aesgarth/PrintMQTTify](https://github.com/Aesgarth/PrintMQTTify) with two main changes: the bundled SEWOO driver is replaced with the **ZJ-58/ZJ-80** CUPS filter from [klirichek/zj-58](https://github.com/klirichek/zj-58), and the printed output is cleaned up (branding removed from every message, vertical separators and text wrapping added).
 
-Features
---------
+---
 
--   **CUPS Integration**: Provides a fully functional CUPS server, capable of managing multiple printers and supporting advanced configurations.
+## What it does
 
--   **MQTT Print Jobs**: Listens for MQTT messages to process print jobs efficiently.
+- Runs a CUPS server in a container and listens on an MQTT topic for print jobs.
+- Formats incoming messages for narrow thermal roll paper (58 mm / 80 mm).
+- Works with USB ESC/POS printers via the ZJ-58/ZJ-80 filter.
+- Optional web control panel for basic settings.
 
--   **USB Printer Support**: Compatible with USB printers and supports custom drivers.
+Typical use: printing Home Assistant shopping lists, reminders, or automation alerts to a receipt printer.
 
--   **Customizable Output**: Allows for tailored print outputs, such as formatted receipts or shopping lists.
+---
 
--   **Web-Based Control Panel**: Includes an optional web interface for managing basic settings and monitoring.
+## Deploy
 
--   **Designed for Home Automation**: Perfect for smart home environments like Home Assistant.
+You need Docker and a reachable MQTT broker (e.g. Mosquitto). Identify your printer's USB device path first with `lsusb` and `dmesg | grep usb` — usually something like `/dev/usb/lp0`.
 
-* * * * *
+**1. Clone this fork:**
 
-Use Cases
----------
-
-Here are some scenarios where PrintMQTTify shines:
-
-1.  **Smart Home Shopping Lists**:
-
-    -   Automatically print unchecked items from a Home Assistant shopping list.
-
-    -   Example scripts are available in the [HA Script Examples](https://github.com/Aesgarth/PrintMQTTify/blob/main/docs/HA%20Script%20Examples.md).
-
-2.  **Event Reminders**:
-
-    -   Print reminders or daily schedules directly from your smart home system.
-
-3.  **Custom Receipts**:
-
-    -   Generate and print receipts with tailored formatting for events or transactions.
-
-4.  **Dynamic Content Printing**:
-
-    -   Send custom messages, recipes, or instructions directly to your printer via MQTT.
-
-* * * * *
-
-Prerequisites
--------------
-
-1.  **Docker**: Ensure Docker is installed and running on your system.
-
-    -   [Install Docker](https://docs.docker.com/get-docker/)
-
-2.  **Git**: Ensure Git is installed to clone the repository.
-
-    -   [Install Git](https://git-scm.com/book/en/v2/Getting-Started-Installing-Git)
-
-3.  **MQTT Broker**: A working MQTT broker (e.g., Mosquitto) is required. Note the broker's IP address, username, and password.
-
-4.  **USB Printer Identification**:
-
-    -   Use `lsusb` and `dmesg | grep usb` to locate the device path of your printer.
-
-    -   Ensure the path (e.g., `/dev/usb/lp0`) is passed to the container.
-
-    Example:
-
-    Bash
-
-    ```
-    lsusb
-    dmesg | grep usb
-
-    ```
-
-* * * * *
-
-Installation
-------------
-
-### 1\. Clone the Repository
-
-Before cloning, ensure you have installed Docker, Git, and have a working MQTT broker. Clone the PrintMQTTify repository to your local machine:
-
-Bash
-
-```
-git clone https://github.com/Aesgarth/PrintMQTTify.git
+```bash
+git clone https://github.com/rainyvalley/PrintMQTTify.git
 cd PrintMQTTify
-
 ```
 
-### 2\. Build the Docker Image
+**2. Build the image:**
 
-Build the Docker image using the included `Dockerfile`:
-
-Bash
-
-```
+```bash
 docker build -t printmqttify .
-
 ```
 
-### 3\. Run the Docker Container
+**3. Configure your broker details.**
 
-Start the container with the following command:
+The tracked `docker-compose.yml` ships with placeholder values on purpose — do **not** commit real credentials into it. Put your real broker IP, username, and password in a local `docker-compose.override.yml` (git-ignored), which Compose merges automatically:
 
-The `docker run` command includes the following flags:
-
--   `--name printmqttify_container`: Names the container for easier management.
-
--   `-d`: Runs the container in detached mode.
-
--   `--privileged`: Grants the container extended privileges, necessary for USB access.
-
--   `-p 631:631`: Maps the container's CUPS web interface port to the host.
-
--   `--device=/dev/usb/lp0:/dev/usb/lp0`: Maps the USB printer device to the container.
-
--   `--ulimit nofile=65536:65536`: Sets the open file limit to prevent issues with newer Docker versions.
-
--   `-e`: Sets environment variables like MQTT broker credentials and admin user details for CUPS.
-
-Bash
-
-```
-docker run --name printmqttify_container\
-  -d\
-  --privileged\
-  -p 631:631\
-  --device=/dev/usb/lp0:/dev/usb/lp0\
-  --ulimit nofile=65536:65536\
-  -e MQTT_BROKER="<your-mqtt-broker-ip>"\
-  -e MQTT_USERNAME="<your-mqtt-username>"\
-  -e MQTT_PASSWORD="<your-mqtt-password>"\
-  -e MQTT_TOPIC="printer/commands"\
-  -e ADMIN_USER="admin"\
-  -e ADMIN_PASS="adminpassword"\
-  printmqttify
-
-```
-
-Replace the placeholders (`<your-mqtt-broker-ip>`, `<your-mqtt-username>`, etc.) with your actual MQTT broker details.
-
-* * * * *
-
-Using Docker Compose
---------------------
-
-Alternatively, you can use Docker Compose to manage the container. Create a `docker-compose.yml` file with the following content:
-
-YAML
-
-```
-version: '3.8'
-
+```yaml
 services:
   printmqttify:
-    image: printmqttify
-    container_name: printmqttify_container
-    privileged: true
-    ports:
-      - "631:631"
-    devices:
-      - "/dev/usb/lp0:/dev/usb/lp0"
     environment:
-      - MQTT_BROKER=<your-mqtt-broker-ip>
-      - MQTT_USERNAME=<your-mqtt-username>
-      - MQTT_PASSWORD=<your-mqtt-password>
-      - MQTT_TOPIC=printer/commands
-      - ADMIN_USER=admin
-      - ADMIN_PASS=adminpassword
-    ulimits:
-      nofile:
-        soft: 65536
-        hard: 65536
-    stdin_open: true
-    tty: true
-
+      - MQTT_BROKER=192.0.2.10        # your broker IP
+      - MQTT_USERNAME=your-username
+      - MQTT_PASSWORD=your-password
+      - ADMIN_PASS=your-cups-admin-pass
+    devices:
+      - "/dev/usb/lp0:/dev/usb/lp0"     # your printer's USB path
 ```
 
-Then start the container with:
+**4. Start it:**
 
-Bash
-
-```
-docker-compose up -d
-
+```bash
+docker compose up -d
 ```
 
-* * * * *
+### Alternative: run with `docker run`
 
-Setup
------
+If you'd rather skip Compose, you can start the container directly. Pass your broker details as environment variables and map your printer's USB device:
 
-### 1\. Access the CUPS Web Interface
-
-1.  Open a browser and navigate to:
-
-    ```
-    https://<host-ip>:631
-
-    ```
-
-    Replace `<host-ip>` with the IP address of the machine running the container.
-
-2.  Log in using the CUPS admin credentials:
-
-    -   Username: `admin` (or as set in `ADMIN_USER`)
-
-    -   Password: `adminpassword` (or as set in `ADMIN_PASS`)
-
-### 2\. Add a Printer
-
-1.  In the CUPS interface, go to **Administration** > **Add Printer**.
-
-2.  Select the connected USB printer.
-
-3.  Choose the appropriate driver (e.g., SEWOO LKT-Series).
-
-4.  Complete the setup and test the printer by printing a test page.
-
-* * * * *
-
-Verification with Home Assistant
---------------------------------
-
-### 1\. Send a Test Message
-
-If your printer doesn't print the message, ensure the following:
-
--   The `printer_name` in the payload matches the name configured in the CUPS web interface.
-
--   The MQTT broker details in the container are correct.
-
--   The printer is connected and has no pending errors in the CUPS interface.
-
--   Check the logs for any errors:
-
-    Bash
-
-    ```
-    docker logs printmqttify_container
-
-    ```
-
-Use Home Assistant to send a message to your printer via MQTT:
-
-1.  Go to **Developer Tools** > **Services** in Home Assistant.
-
-2.  Select the `mqtt.publish` service.
-
-3.  Enter the following data:
-
-    YAML
-
-    ```
-    service: mqtt.publish
-    data:
-      topic: "printer/commands"
-      payload: '{"printer_name": "SEWOO_LK-T100", "message": "Hello, World!"}'
-
-    ```
-
-4.  Click **Call Service**.
-
-### 2\. Verify the Output
-
-Check your printer to confirm that the message has been printed. If the message does not print, check the container logs for errors:
-
-Bash
-
-```
-docker logs printmqttify_container
-
+```bash
+docker run --name printmqttify_container \
+  -d \
+  --privileged \
+  -p 631:631 \
+  -p 8080:8080 \
+  --device=/dev/usb/lp0:/dev/usb/lp0 \
+  --ulimit nofile=65536:65536 \
+  -e MQTT_BROKER="192.0.2.10" \
+  -e MQTT_USERNAME="your-username" \
+  -e MQTT_PASSWORD="your-password" \
+  -e MQTT_TOPIC="printer/commands" \
+  -e ADMIN_USER="admin" \
+  -e ADMIN_PASS="your-cups-admin-pass" \
+  printmqttify
 ```
 
-* * * * *
+Flags: `--privileged` and `--device` give the container USB access to the printer, `-p 631:631` exposes the CUPS web interface, `-p 8080:8080` the control panel, and `--ulimit nofile=65536:65536` avoids file-descriptor issues on newer Docker. Replace the placeholder values with your own — and note these are visible in your shell history, so the Compose override method above is preferable for anything sensitive.
 
-Troubleshooting
----------------
+**5. Add the printer in CUPS.** Open `https://<host-ip>:631`, log in with your `ADMIN_USER` / `ADMIN_PASS`, go to **Administration → Add Printer**, select the USB printer, and choose the **ZJ-58** (or **ZJ-80**) driver. Print a test page to confirm.
 
-For troubleshooting steps and common issues, see the [Troubleshooting Documentation](https://github.com/Aesgarth/PrintMQTTify/blob/main/docs/troubleshooting.md).
+**6. Send a test message** (Home Assistant example):
 
-* * * * *
+```yaml
+service: mqtt.publish
+data:
+  topic: "printer/commands"
+  payload: '{"printer_name": "ZJ-58", "message": "Hello, World!"}'
+```
 
-Customization
--------------
+Check logs with `docker logs printmqttify_container` if nothing prints.
 
-### Printing Short Lists in Landscape
+---
 
-By default, PrintMQTTify forces all printouts into a "portrait" orientation. This ensures that even very short lists are printed with the text oriented vertically. However, if you prefer short lists to be printed in "landscape" (horizontally), you can revert to the old behavior by making a small change to the code.
+## Credits & thanks
 
-Follow these steps to allow landscape printing:
+This project stands entirely on other people's work — huge thanks to both:
 
-1.  **Open the handler file**: Edit the `app/printer_mqtt_handler.py` file in the repository.
+- **[Aesgarth/PrintMQTTify](https://github.com/Aesgarth/PrintMQTTify)** — the original MQTT-to-CUPS print client this is forked from. Released under Creative Commons Zero v1.0 (CC0-1.0). Thank you for building the thing this fork is a small tweak on.
+- **[klirichek/zj-58](https://github.com/klirichek/zj-58)** — the CUPS filter that makes ZJ-58/ZJ-80 and other ESC/POS thermal printers work. Licensed BSD-2-Clause, © Aleksey N. Vinogradov (klirichek). Thank you for reverse-engineering and maintaining this driver. See [`LICENSE.zj-58`](./LICENSE.zj-58) for the full license text, which is retained here as that license requires.
 
-2.  **Locate the `generate_pdf` function**: Find the function named `generate_pdf`.
+If you find this useful, please go star both of the repositories above — the original authors did the hard parts.
 
-3.  **Modify the `page_height` calculation**: Inside this function, find the following line:
+---
 
-    Python
+## License
 
-    ```
-    page_height = max(calculated_height, page_width + 1)
-
-    ```
-
-4.  **Change the line**: Replace the line above with the original calculation:
-
-    Python
-
-    ```
-    page_height = calculated_height
-
-    ```
-
-5.  **Rebuild the Docker image**: After saving your changes, rebuild the Docker image for the changes to take effect:
-
-    Bash
-
-    ```
-    docker build -t printmqttify .
-
-    ```
-
-6.  **Restart the container**: Stop and restart your Docker container to apply the new image.
-
-* * * * *
-
-Contributing
-------------
-
-Contributions are welcome! Feel free to submit issues or pull requests on GitHub.
-
-* * * * *
-
-License
--------
-
-This project is licensed under the Creative Commons Zero v1.0 Universal (CC0 1.0) License. See the [LICENSE](https://github.com/Aesgarth/PrintMQTTify/blob/main/LICENSE) file for more details.
+The PrintMQTTify portion follows the upstream project's Creative Commons Zero v1.0 (CC0-1.0) dedication. The bundled ZJ-58/ZJ-80 filter remains under its own BSD-2-Clause license (see [`LICENSE.zj-58`](./LICENSE.zj-58)).
