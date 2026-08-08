@@ -55,3 +55,6 @@ WORKDIR $APP_DIR
 
 # Use entrypoint script for runtime configuration and startup
 ENTRYPOINT ["/app/entrypoint.sh"]
+
+
+
