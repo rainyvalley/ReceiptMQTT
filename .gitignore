@@ -1,0 +1,4 @@
+path/to/your-config-file
+docker-compose.override.yml
+.env
+.vs/
