@@ -89,7 +89,7 @@ def generate_pdf(title, message):
     """Generate a PDF optimized for thermal receipt printers."""
     try:
         # Fixed page width; height is dynamic
-        page_width = 58 * mm  # 80mm in points
+        page_width = 48 * mm  # must match the PPD print width or CUPS scales the text up
         margin = 5 * mm  # Margins for the receipt
         content_width = page_width - (2 * margin)
 
@@ -123,7 +123,7 @@ def generate_pdf(title, message):
 
         # Calculate the required height for the content
         line_height = 12  # Line height in points
-        calculated_height = margin + (len(lines) + 3) * line_height  # Extra lines for title and footer
+        calculated_height = margin + (len(lines) + 2) * line_height  # Extra lines for title and footer
 
         # **FIX:** Ensure the page height is always greater than the width for portrait orientation
         page_height = max(calculated_height, page_width + 1)

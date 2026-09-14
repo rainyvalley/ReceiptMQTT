@@ -28,6 +28,8 @@ EXPOSE 631
 
 # Copy the pre-configured CUPS config, PPD and entrypoint script
 COPY configs/cupsd.conf $APP_DIR/cupsd.conf
+COPY configs/cups-files.conf $APP_DIR/cups-files.conf
+COPY configs/ReceiptPrinter.ppd $APP_DIR/ReceiptPrinter.ppd
 COPY entrypoint.sh $APP_DIR/entrypoint.sh
 
 # Copy the templates directory
@@ -53,7 +55,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     rm -rf /var/lib/apt/lists/*
 
 # Ensure permissions are correct
-RUN chmod 644 $APP_DIR/cupsd.conf && chmod +x $APP_DIR/entrypoint.sh
+RUN chmod 644 $APP_DIR/cupsd.conf $APP_DIR/ReceiptPrinter.ppd && \
+    chmod +x $APP_DIR/entrypoint.sh
 
 # Copy the MQTT handler script
 COPY app/printer_mqtt_handler.py $APP_DIR/printer_mqtt_handler.py
