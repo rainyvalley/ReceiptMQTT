@@ -26,9 +26,14 @@ else
   echo "Admin user already exists."
 fi
 
+# Start D-Bus (avahi-daemon will not start without it)
+echo "Starting D-Bus..."
+mkdir -p /var/run/dbus
+service dbus start || true
+
 # Start Avahi Daemon
 echo "Starting Avahi Daemon..."
-service avahi-daemon start
+service avahi-daemon start || true
 
 # Stop any running CUPS processes
 echo "Ensuring no conflicting CUPS processes..."
@@ -48,6 +53,27 @@ fi
 sleep 2
 
 cupsctl --remote-admin --remote-any --share-printers
+
+# Ensure ReceiptPrinter exists and is configured
+PRINTER_NAME=${PRINTER_NAME:-ReceiptPrinter}
+PRINTER_URI=${PRINTER_URI:-usb://Unknown/Printer?serial=Printer}
+PRINTER_PPD=${PRINTER_PPD:-/usr/share/cups/model/zjiang/zj58.ppd}
+
+if ! lpstat -p "$PRINTER_NAME" > /dev/null 2>&1; then
+  echo "Creating $PRINTER_NAME..."
+  lpadmin -p "$PRINTER_NAME" \
+    -v "$PRINTER_URI" \
+    -P "$PRINTER_PPD" \
+    -D "Zijiang ZJ-58" \
+    -o printer-error-policy=abort-job \
+    -E
+else
+  echo "$PRINTER_NAME already exists."
+  lpadmin -p "$PRINTER_NAME" -o printer-error-policy=abort-job
+fi
+lpadmin -d "$PRINTER_NAME"
+cupsaccept "$PRINTER_NAME"
+cupsenable "$PRINTER_NAME"
 
 # Tail the CUPS log in the background
 echo "Tailing CUPS logs..."

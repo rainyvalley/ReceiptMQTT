@@ -17,18 +17,30 @@ availability_topic = "printer/availability"
 
 def publish_availability(client, interval=60):
     """Publish printer availability periodically."""
+    printer_name = os.getenv("PRINTER_NAME", "ReceiptPrinter")
+
     def publish_status():
+        last_status = None
         while True:
             try:
                 # Check if the printer is available
-                result = subprocess.run(["lpstat", "-p"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-                status = "online" if "idle" in result.stdout else "offline"
+                result = subprocess.run(["lpstat", "-p", printer_name], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                if result.returncode != 0:
+                    print(f"lpstat failed rc={result.returncode}: {result.stderr.strip()}")
+                    status = "offline"
+                elif not result.stdout.strip() or "disabled" in result.stdout:
+                    status = "offline"
+                else:
+                    # "processing" counts as online; only "disabled" means down
+                    status = "online"
             except Exception as e:
                 print(f"Error checking printer status: {e}")
                 status = "offline"
 
-            # Debug log and publish the status
-            print(f"Publishing status: {status}")
+            # Only log and publish on change; the topic is retained
+            if status != last_status:
+                print(f"Publishing status: {status}")
+                last_status = status
             client.publish(availability_topic, str(status), qos=1, retain=True)
             time.sleep(interval)
 
