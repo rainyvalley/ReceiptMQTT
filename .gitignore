@@ -5,3 +5,5 @@ docker-compose.override.yml
 backup/
 *.bak
 *.save
+__pycache__/
+*.pyc

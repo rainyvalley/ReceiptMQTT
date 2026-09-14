@@ -13,6 +13,16 @@ else
   echo "Custom cupsd.conf not found!"
 fi
 
+# Copy the custom cups-files.conf (FileDevice Yes, required by the file backend)
+if [ -f /app/cups-files.conf ]; then
+  echo "Copying custom cups-files.conf..."
+  cp /app/cups-files.conf /etc/cups/cups-files.conf
+  chmod 640 /etc/cups/cups-files.conf
+  chown root:lp /etc/cups/cups-files.conf
+else
+  echo "Custom cups-files.conf not found!"
+fi
+
 # Create admin user if it doesn't already exist
 ADMIN_USER=${ADMIN_USER:-admin}
 ADMIN_PASS=${ADMIN_PASS:-adminpassword}
@@ -52,12 +62,12 @@ fi
 # Wait for CUPS to initialize
 sleep 2
 
-cupsctl --remote-admin --remote-any --share-printers
+cupsctl --remote-admin --remote-any --no-share-printers
 
 # Ensure ReceiptPrinter exists and is configured
 PRINTER_NAME=${PRINTER_NAME:-ReceiptPrinter}
-PRINTER_URI=${PRINTER_URI:-usb://Unknown/Printer?serial=Printer}
-PRINTER_PPD=${PRINTER_PPD:-/usr/share/cups/model/zjiang/zj58.ppd}
+PRINTER_URI=${PRINTER_URI:-file:/dev/usb/lp1}
+PRINTER_PPD=${PRINTER_PPD:-/app/ReceiptPrinter.ppd}
 
 if ! lpstat -p "$PRINTER_NAME" > /dev/null 2>&1; then
   echo "Creating $PRINTER_NAME..."
@@ -71,6 +81,14 @@ else
   echo "$PRINTER_NAME already exists."
   lpadmin -p "$PRINTER_NAME" -o printer-error-policy=abort-job
 fi
+# Page size and feed behaviour, re-applied every start (lpadmin does not
+# persist these across a container rebuild)
+lpadmin -p "$PRINTER_NAME" \
+  -o PageSize=${PRINTER_PAGESIZE:-X48MMY60MM} \
+  -o FeedDist=0feed3mm \
+  -o BlankSpace=1NoPrint \
+  -o Cutting=0NoCutting
+
 lpadmin -d "$PRINTER_NAME"
 cupsaccept "$PRINTER_NAME"
 cupsenable "$PRINTER_NAME"
