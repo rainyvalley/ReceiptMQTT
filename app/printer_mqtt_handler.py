@@ -1,5 +1,7 @@
 import paho.mqtt.client as mqtt
+import errno
 import os
+import select
 import subprocess
 import time
 import threading
@@ -13,6 +15,46 @@ username = os.getenv("MQTT_USERNAME")
 password = os.getenv("MQTT_PASSWORD")
 topic = os.getenv("MQTT_TOPIC", "printer/commands")
 availability_topic = "printer/availability"
+paper_topic = os.getenv("MQTT_PAPER_TOPIC", "printer/paper")
+paper_device = os.getenv("PAPER_DEVICE", "/dev/usb/lp1")
+
+# DLE EOT 4 - real-time paper sensor status request. "Real-time" means the
+# printer answers immediately rather than queueing the request behind print
+# data, so this works even while a job is running.
+PAPER_QUERY = b"\x10\x04\x04"
+
+
+def query_paper():
+    """Ask the printer whether it has paper.
+
+    Returns True (paper present), False (out of paper), or None when the
+    printer did not answer - either it is unidirectional, the device is
+    busy with a print job, or it is unplugged. None means "unknown", which
+    is deliberately not the same as "out".
+    """
+    fd = None
+    try:
+        fd = os.open(paper_device, os.O_RDWR | os.O_NONBLOCK)
+        os.write(fd, PAPER_QUERY)
+        ready, _, _ = select.select([fd], [], [], 1.0)
+        if not ready:
+            return None
+        response = os.read(fd, 8)
+        if not response:
+            return None
+        # Bits 5 and 6 both set means the paper-end sensor reports no paper.
+        return (response[-1] & 0x60) != 0x60
+    except OSError as e:
+        if e.errno not in (errno.EBUSY, errno.EAGAIN, errno.ENODEV,
+                           errno.ENOENT, errno.EACCES):
+            print(f"Paper status query failed: {e}")
+        return None
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
 
 
 def publish_availability(client, interval=60):
@@ -21,6 +63,8 @@ def publish_availability(client, interval=60):
 
     def publish_status():
         last_status = None
+        last_paper = None
+        warned_no_sensor = False
         while True:
             try:
                 # Check if the printer is available
@@ -42,6 +86,23 @@ def publish_availability(client, interval=60):
                 print(f"Publishing status: {status}")
                 last_status = status
             client.publish(availability_topic, str(status), qos=1, retain=True)
+
+            # Paper sensor. Polled on the same cadence so only one thread
+            # ever touches the device. An unanswered query leaves the last
+            # known value retained rather than reporting a false "out".
+            paper = query_paper()
+            if paper is None:
+                if not warned_no_sensor and last_paper is None:
+                    print(f"No paper status from {paper_device} "
+                          "(printer may be unidirectional)")
+                    warned_no_sensor = True
+            else:
+                payload = "ON" if paper else "OFF"
+                if paper != last_paper:
+                    print(f"Publishing paper: {payload}")
+                    last_paper = paper
+                client.publish(paper_topic, payload, qos=1, retain=True)
+
             time.sleep(interval)
 
     thread = threading.Thread(target=publish_status, daemon=True)
