@@ -16,6 +16,7 @@ password = os.getenv("MQTT_PASSWORD")
 topic = os.getenv("MQTT_TOPIC", "printer/commands")
 availability_topic = "printer/availability"
 paper_topic = os.getenv("MQTT_PAPER_TOPIC", "printer/paper")
+paper_low_topic = os.getenv("MQTT_PAPER_LOW_TOPIC", "printer/paper_low")
 paper_device = os.getenv("PAPER_DEVICE", "/dev/usb/lp1")
 
 # DLE EOT 4 - real-time paper sensor status request. "Real-time" means the
@@ -27,10 +28,14 @@ PAPER_QUERY = b"\x10\x04\x04"
 def query_paper():
     """Ask the printer whether it has paper.
 
-    Returns True (paper present), False (out of paper), or None when the
-    printer did not answer - either it is unidirectional, the device is
-    busy with a print job, or it is unplugged. None means "unknown", which
-    is deliberately not the same as "out".
+    Returns (present, low) or None when the printer did not answer -
+    either it is unidirectional, the device is busy with a print job, or
+    it is unplugged. None means "unknown", which is deliberately not the
+    same as "out".
+
+    present: False once the paper-end sensor trips.
+    low:     True once the near-end sensor trips, on units that have one.
+             Always False on units that do not.
     """
     fd = None
     try:
@@ -42,8 +47,10 @@ def query_paper():
         response = os.read(fd, 8)
         if not response:
             return None
-        # Bits 5 and 6 both set means the paper-end sensor reports no paper.
-        return (response[-1] & 0x60) != 0x60
+        status = response[-1]
+        # Bits 5 and 6 both set: paper-end sensor reports no paper.
+        # Bits 2 and 3 both set: near-end (low paper) sensor has tripped.
+        return ((status & 0x60) != 0x60, (status & 0x0C) == 0x0C)
     except OSError as e:
         if e.errno not in (errno.EBUSY, errno.EAGAIN, errno.ENODEV,
                            errno.ENOENT, errno.EACCES):
@@ -64,6 +71,7 @@ def publish_availability(client, interval=60):
     def publish_status():
         last_status = None
         last_paper = None
+        last_low = None
         warned_no_sensor = False
         while True:
             try:
@@ -90,18 +98,26 @@ def publish_availability(client, interval=60):
             # Paper sensor. Polled on the same cadence so only one thread
             # ever touches the device. An unanswered query leaves the last
             # known value retained rather than reporting a false "out".
-            paper = query_paper()
-            if paper is None:
+            result = query_paper()
+            if result is None:
                 if not warned_no_sensor and last_paper is None:
                     print(f"No paper status from {paper_device} "
                           "(printer may be unidirectional)")
                     warned_no_sensor = True
             else:
+                paper, low = result
+
                 payload = "ON" if paper else "OFF"
                 if paper != last_paper:
                     print(f"Publishing paper: {payload}")
                     last_paper = paper
                 client.publish(paper_topic, payload, qos=1, retain=True)
+
+                low_payload = "ON" if low else "OFF"
+                if low != last_low:
+                    print(f"Publishing paper_low: {low_payload}")
+                    last_low = low
+                client.publish(paper_low_topic, low_payload, qos=1, retain=True)
 
             time.sleep(interval)
 

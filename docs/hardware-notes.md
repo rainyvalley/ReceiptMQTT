@@ -66,7 +66,12 @@ use 136.
 
 The handler polls the printer with `DLE EOT 4` (`10 04 04`) on the same
 60s cadence as the availability check, and publishes `ON`/`OFF` to
-`printer/paper` (retained). `ON` means paper is present.
+`printer/paper` and `printer/paper_low` (both retained). On
+`printer/paper`, `ON` means paper is present. On `printer/paper_low`,
+`ON` means the near-end sensor has tripped.
+
+Not every unit has a near-end sensor. If yours does not, those bits stay
+clear and `printer/paper_low` simply reports `OFF` forever.
 
 This needs a **bidirectional** printer. If yours only has a bulk-out
 endpoint the query is never answered, the handler logs
@@ -97,9 +102,20 @@ it mid-job. That is treated as "unknown" and the last retained value stands.
 mqtt:
   binary_sensor:
     - name: "Receipt Printer Paper"
+      unique_id: receipt_printer_paper
       state_topic: "printer/paper"
       payload_on: "OFF"          # ON = a problem = out of paper
       payload_off: "ON"
+      device_class: problem
+      availability_topic: "printer/availability"
+      payload_available: "online"
+      payload_not_available: "offline"
+
+    - name: "Receipt Printer Paper Low"
+      unique_id: receipt_printer_paper_low
+      state_topic: "printer/paper_low"
+      payload_on: "ON"           # ON = near-end sensor tripped
+      payload_off: "OFF"
       device_class: problem
       availability_topic: "printer/availability"
       payload_available: "online"
