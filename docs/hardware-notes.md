@@ -61,3 +61,47 @@ Adding a size means four matching entries (`*PageSize`, `*PageRegion`,
 `*ImageableArea`, `*PaperDimension`) plus a `*ru.PageSize` translation line,
 or `cupstestppd` fails. Note `*PageRegion` uses width 164 where the others
 use 136.
+
+## Paper sensor
+
+The handler polls the printer with `DLE EOT 4` (`10 04 04`) on the same
+60s cadence as the availability check, and publishes `ON`/`OFF` to
+`printer/paper` (retained). `ON` means paper is present.
+
+This needs a **bidirectional** printer. If yours only has a bulk-out
+endpoint the query is never answered, the handler logs
+"No paper status ... (printer may be unidirectional)" once, and the topic
+is simply never published — it does not report a false "out".
+
+Check by hand before assuming it works:
+
+```sh
+sudo docker compose exec printmqttify python3 - <<'PY'
+import os, select
+fd = os.open("/dev/usb/lp1", os.O_RDWR | os.O_NONBLOCK)
+os.write(fd, b"\x10\x04\x04")
+print(os.read(fd, 8) if select.select([fd], [], [], 1.0)[0] else "no response")
+PY
+```
+
+A one-byte response is the status. Bits 5 and 6 both set (`& 0x60 == 0x60`)
+means out of paper; bits 2 and 3 both set (`& 0x0C == 0x0C`) means the
+near-end sensor has tripped, on units that have one.
+
+The query opens the device directly, so it returns EBUSY while CUPS holds
+it mid-job. That is treated as "unknown" and the last retained value stands.
+
+### Home Assistant
+
+```yaml
+mqtt:
+  binary_sensor:
+    - name: "Receipt Printer Paper"
+      state_topic: "printer/paper"
+      payload_on: "OFF"          # ON = a problem = out of paper
+      payload_off: "ON"
+      device_class: problem
+      availability_topic: "printer/availability"
+      payload_available: "online"
+      payload_not_available: "offline"
+```
