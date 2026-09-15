@@ -1,6 +1,6 @@
-# PrintMQTTify (ZJ-58 / ZJ-80 edition)
+# PrintMQTTify (ZJ-58 / ZJ-80 / POS58 edition)
 
-A Docker-based bridge between MQTT and a CUPS printer, aimed at cheap ESC/POS thermal receipt printers (Zijiang **ZJ-58** / **ZJ-80** and compatible clones). Publish a message to an MQTT topic — from Home Assistant, Node-RED, or anything else — and it prints.
+A Docker-based bridge between MQTT and a CUPS printer, aimed at cheap ESC/POS thermal receipt printers (Zijiang **ZJ-58** / **ZJ-80**, the widely rebadged **POS58**, and compatible clones). Publish a message to an MQTT topic — from Home Assistant, Node-RED, or anything else — and it prints.
 
 This is a fork of [Aesgarth/PrintMQTTify](https://github.com/Aesgarth/PrintMQTTify) with two main changes: the bundled SEWOO driver is replaced with the **ZJ-58/ZJ-80** CUPS filter from [klirichek/zj-58](https://github.com/klirichek/zj-58), and the printed output is cleaned up (branding removed from every message, vertical separators and text wrapping added).
 
@@ -10,20 +10,18 @@ This is a fork of [Aesgarth/PrintMQTTify](https://github.com/Aesgarth/PrintMQTTi
 
 - Runs a CUPS server in a container and listens on an MQTT topic for print jobs.
 - Formats incoming messages for narrow thermal roll paper (58 mm / 80 mm).
-- Works with USB ESC/POS printers via the ZJ-58/ZJ-80 filter.
+- Works with USB ESC/POS printers via the ZJ-58/ZJ-80 filter. The 58 mm PPD also drives POS58-class clones, which report varied USB vendor strings (e.g. `STMicroelectronics` / `POS58 Printer USB`) but take the same ESC/POS.
 - Optional web control panel for basic settings.
 
 Typical use: printing Home Assistant shopping lists, reminders, or automation alerts to a receipt printer.
 
 ### Added in this fork
 
-- **The printer is created on container start.** The queue used to exist only inside the container's `printers.conf` and was lost on every rebuild. `entrypoint.sh` now runs `lpadmin` itself, so a fresh container comes up ready to print. Overridable with `PRINTER_NAME`, `PRINTER_URI`, `PRINTER_PPD`, `PRINTER_PAGESIZE`.
-- **Short receipts.** The stock PPD's shortest page is 210 mm, and `rastertozj` pads every job out to the full declared page — so a two-line reminder fed roughly eight inches of paper. `configs/ReceiptPrinter.ppd` adds 60 mm and 105 mm page sizes.
-- **The queue can no longer disable itself silently.** `MaxJobTime 300` and `ErrorPolicy abort-job` mean a stalled job costs you one receipt instead of taking the printer offline until someone notices.
-- **Honest availability reporting.** The old check looked for the literal string `idle` in unqualified `lpstat` output, which also missed while a job was printing. It now names the printer, surfaces `lpstat` failures instead of swallowing them, and treats only `disabled` as down. Published retained to `printer/availability`, with an MQTT last-will so a dead container shows offline.
-- **Paper sensors.** The printer is polled with `DLE EOT 4` and the result published to `printer/paper` and `printer/paper_low` (both retained). Needs a bidirectional printer; see [`docs/hardware-notes.md`](./docs/hardware-notes.md).
-- **File backend support.** On some hosts CUPS' libusb backend enumerates the printer but cannot claim it — jobs complete with bytes "sent" and nothing reaches the paper. Setting `PRINTER_URI=file:/dev/usb/lp0` writes to the kernel character device instead. `configs/cups-files.conf` carries the `FileDevice Yes` this requires.
-- **Debian bookworm base**, with `rastertozj` genuinely compiled at build time rather than falling back to the prebuilt binary in the driver tarball.
+- ZJ-58/ZJ-80 ESC/POS filter in place of the bundled SEWOO driver, on a Debian bookworm base.
+- The printer queue is created on container start, so it survives rebuilds.
+- Shorter receipts: a 60 mm page size, against the stock PPD's 210 mm minimum.
+- Paper and paper-low state published to MQTT, alongside availability.
+- A stalled job no longer disables the queue.
 
 ---
 
@@ -89,15 +87,13 @@ docker run --name printmqttify_container \
 
 Flags: `--privileged` and `--device` give the container USB access to the printer, `-p 631:631` exposes the CUPS web interface, `-p 8080:8080` the control panel, and `--ulimit nofile=65536:65536` avoids file-descriptor issues on newer Docker. Replace the placeholder values with your own — and note these are visible in your shell history, so the Compose override method above is preferable for anything sensitive.
 
-**5. Add the printer in CUPS.** Open `https://<host-ip>:631`, log in with your `ADMIN_USER` / `ADMIN_PASS`, go to **Administration → Add Printer**, select the USB printer, and choose the **ZJ-58** (or **ZJ-80**) driver. Print a test page to confirm.
+**5. Add the printer in CUPS.** Open `https://<host-ip>:631`, log in with your `ADMIN_USER` / `ADMIN_PASS`, go to **Administration → Add Printer**, select the USB printer, and choose the **ZJ-58** driver for 58 mm rolls (including POS58 clones) or **ZJ-80** for 80 mm. Print a test page to confirm.
 
-**6. Send a test message** (Home Assistant example):
+**6. Send a test message.** See [Home Assistant](#home-assistant) below, or from a shell:
 
-```yaml
-service: mqtt.publish
-data:
-  topic: "printer/commands"
-  payload: '{"printer_name": "ZJ-58", "message": "Hello, World!"}'
+```bash
+mosquitto_pub -h <broker> -u <user> -P <pass> -t printer/commands \
+  -m '{"printer_name": "ReceiptPrinter", "title": "Test", "message": "Hello, World!"}'
 ```
 
 Check logs with `docker logs printmqttify_container` if nothing prints.
