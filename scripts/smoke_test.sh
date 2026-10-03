@@ -55,7 +55,18 @@ spec = importlib.util.spec_from_file_location(
     "printer_mqtt_handler", "app/printer_mqtt_handler.py")
 h = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(h)
-esc = h.print_job("Smoke Test", "Line one\nLine two", "ReceiptPrinter")
+import escpos
+
+# reportlab -> gs -> escpos, without the CUPS queue leg (no cupsd here)
+import tempfile, os
+settings = escpos.EscposSettings.from_env()
+fd, pdf_path = tempfile.mkstemp(prefix="smoke_", suffix=".pdf")
+os.close(fd)
+try:
+    h.generate_pdf("Smoke Test", "Line one\nLine two", pdf_path)
+    esc = h.pdf_to_escpos(pdf_path, settings)
+finally:
+    os.unlink(pdf_path)
 assert esc.startswith(b"\x1b@"), "missing ESC @"
 assert b"\x1d\x76\x30\x00" in esc, "missing GS v 0 raster band"
 assert esc.endswith(b"\x1bi\x1b@") or esc.endswith(b"\x1b@\x1bi"), \
