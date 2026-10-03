@@ -2,14 +2,13 @@ services:
   printmqttify:
     image: ghcr.io/rainyvalley/receiptmqtt:latest
     container_name: printmqttify_container
-    privileged: true
     ports:
-      - "1631:631"
       - "8080:8080"
     volumes:
       - /dev/bus/usb:/dev/bus/usb
     environment:
-      - MQTT_BROKER=192.168.0.71
+      - PRINTER_URI=file:/dev/usb/lp1
+      - MQTT_BROKER=your-broker-ip
       - MQTT_USERNAME=your-username
       - MQTT_PASSWORD=your-password
       - MQTT_TOPIC=printer/commands
