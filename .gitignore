@@ -7,3 +7,6 @@ backup/
 *.save
 __pycache__/
 *.pyc
+
+# Local agent guidance, keep untracked
+AGENTS.md
