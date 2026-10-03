@@ -25,12 +25,7 @@ fi
 
 # Create admin user if it doesn't already exist
 ADMIN_USER=${ADMIN_USER:-admin}
-ADMIN_PASS=${ADMIN_PASS:-}
-
-if [ -z "$ADMIN_PASS" ]; then
-  echo "ADMIN_PASS is not set; refusing to start with a default CUPS admin password."
-  exit 1
-fi
+ADMIN_PASS=${ADMIN_PASS:-adminpassword}
 
 if ! id -u $ADMIN_USER > /dev/null 2>&1; then
   echo "Creating admin user..."
@@ -41,10 +36,14 @@ else
   echo "Admin user already exists."
 fi
 
-# Start D-Bus
+# Start D-Bus (avahi-daemon will not start without it)
 echo "Starting D-Bus..."
 mkdir -p /var/run/dbus
 service dbus start || true
+
+# Start Avahi Daemon
+echo "Starting Avahi Daemon..."
+service avahi-daemon start || true
 
 # Stop any running CUPS processes
 echo "Ensuring no conflicting CUPS processes..."
@@ -63,18 +62,18 @@ fi
 # Wait for CUPS to initialize
 sleep 2
 
-# Ensure ReceiptPrinter exists and is configured as a raw queue.
-# Printing is done entirely in-app (PDF -> ghostscript pbmraw ->
-# app/escpos.py -> ESC/POS bytes), so CUPS needs no PPD and no filter
-# chain; it only moves bytes to the file-device backend.
+cupsctl --remote-admin --remote-any --no-share-printers
+
+# Ensure ReceiptPrinter exists and is configured
 PRINTER_NAME=${PRINTER_NAME:-ReceiptPrinter}
 PRINTER_URI=${PRINTER_URI:-file:/dev/usb/lp1}
+PRINTER_PPD=${PRINTER_PPD:-/app/ReceiptPrinter.ppd}
 
 if ! lpstat -p "$PRINTER_NAME" > /dev/null 2>&1; then
   echo "Creating $PRINTER_NAME..."
   lpadmin -p "$PRINTER_NAME" \
     -v "$PRINTER_URI" \
-    -m raw \
+    -P "$PRINTER_PPD" \
     -D "Zijiang ZJ-58" \
     -o printer-error-policy=abort-job \
     -E
@@ -82,6 +81,13 @@ else
   echo "$PRINTER_NAME already exists."
   lpadmin -p "$PRINTER_NAME" -o printer-error-policy=abort-job
 fi
+# Page size and feed behaviour, re-applied every start (lpadmin does not
+# persist these across a container rebuild)
+lpadmin -p "$PRINTER_NAME" \
+  -o PageSize=${PRINTER_PAGESIZE:-X48MMY60MM} \
+  -o FeedDist=0feed3mm \
+  -o BlankSpace=1NoPrint \
+  -o Cutting=0NoCutting
 
 lpadmin -d "$PRINTER_NAME"
 cupsaccept "$PRINTER_NAME"
@@ -89,7 +95,7 @@ cupsenable "$PRINTER_NAME"
 
 # Tail the CUPS log in the background
 echo "Tailing CUPS logs..."
-tail -F /var/log/cups/error_log &
+tail -f /var/log/cups/error_log &
 
 # Start the Flask web control panel
 echo "Starting Flask web control panel..."

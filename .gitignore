@@ -10,3 +10,6 @@ __pycache__/
 
 # Local agent guidance, keep untracked
 AGENTS.md
+
+# Local revert helper script (run manually, never committed)
+revert-to-legacy.sh
