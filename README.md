@@ -2,7 +2,7 @@
 
 A Docker-based bridge between MQTT and a CUPS printer, aimed at cheap ESC/POS thermal receipt printers (Zijiang **ZJ-58** / **ZJ-80**, the widely rebadged **POS58**, and compatible clones). Publish a message to an MQTT topic — from Home Assistant, Node-RED, or anything else — and it prints.
 
-This is a fork of [Aesgarth/PrintMQTTify](https://github.com/Aesgarth/PrintMQTTify) with two main changes: the bundled SEWOO driver is replaced with the **ZJ-58/ZJ-80** CUPS filter from [klirichek/zj-58](https://github.com/klirichek/zj-58), and the printed output is cleaned up (branding removed from every message, vertical separators and text wrapping added).
+This is a fork of [Aesgarth/PrintMQTTify](https://github.com/Aesgarth/PrintMQTTify). The bundled SEWOO driver was first replaced with the **ZJ-58/ZJ-80** CUPS filter from [klirichek/zj-58](https://github.com/klirichek/zj-58), and that filter's ESC/POS output logic is now ported into the app itself (`app/escpos.py`), because CUPS deprecated PPD-based drivers. Printed output is cleaned up too (branding removed, vertical separators, text wrapping).
 
 ---
 
@@ -10,18 +10,20 @@ This is a fork of [Aesgarth/PrintMQTTify](https://github.com/Aesgarth/PrintMQTTi
 
 - Runs a CUPS server in a container and listens on an MQTT topic for print jobs.
 - Formats incoming messages for narrow thermal roll paper (58 mm / 80 mm).
-- Works with USB ESC/POS printers via the ZJ-58/ZJ-80 filter. The 58 mm PPD also drives POS58-class clones, which report varied USB vendor strings (e.g. `STMicroelectronics` / `POS58 Printer USB`) but take the same ESC/POS.
-- Optional web control panel for basic settings.
+- Renders each receipt to a bitmap (ghostscript) and emits ESC/POS directly, then queues the raw bytes via CUPS — no PPDs, no CUPS filters, works identically on amd64 and arm64, and on CUPS 2.4 or 3.x.
+- Works with USB ESC/POS printers: ZJ-58/ZJ-80 and POS58-class clones, which report varied USB vendor strings (e.g. `STMicroelectronics` / `POS58 Printer USB`) but take the same ESC/POS.
+- Optional web control panel (Basic-auth protected) for status and test prints.
 
 Typical use: printing Home Assistant shopping lists, reminders, or automation alerts to a receipt printer.
 
 ### Added in this fork
 
-- ZJ-58/ZJ-80 ESC/POS filter in place of the bundled SEWOO driver, on a Debian bookworm base.
+- rastertozj's ESC/POS emission ported to Python (`app/escpos.py`); CUPS queue is raw, so the deprecated PPD/filter model is gone entirely.
 - The printer queue is created on container start, so it survives rebuilds.
-- Shorter receipts: a 60 mm page size, against the stock PPD's 210 mm minimum.
+- Shorter receipts: page height tracks the message length, capped in raster lines (`RASTER_HEIGHT_PX`, default 480 = the old 60 mm page).
 - Paper and paper-low state published to MQTT, alongside availability.
 - A stalled job no longer disables the queue.
+- Prebuilt multi-arch images published by CI; hardware-free pipeline smoke test on every push.
 
 ---
 
@@ -48,7 +50,7 @@ docker pull ghcr.io/rainyvalley/receiptmqtt:latest
 
 The tracked `docker-compose.yml` already points at that image, so Compose pulls it for you on first `up`.
 
-Tags available: `latest` (tracks `main`), `sha-<commit>` for every build, and semver tags (`1.2.3`, `1.2`) if you cut `v*` tags. Builds are cached and deterministic; the `rastertozj` filter is compiled from the bundled source in-image, not shipped as a binary.
+Tags available: `latest` (tracks `main`), `sha-<commit>` for every build, and semver tags (`1.2.3`, `1.2`) if you cut `v*` tags. CI also runs the pipeline smoke test on every push before publishing. There is no CUPS printer driver inside the image at all: printing is done in-app (reportlab -> ghostscript -> ESC/POS) straight to a raw CUPS queue, so the image is identical on amd64 and arm64.
 
 ### Option B: build locally
 
@@ -91,11 +93,11 @@ If you'd rather skip Compose, you can start the container directly. Pass your br
 ```bash
 docker run --name printmqttify_container \
   -d \
-  --privileged \
-  -p 631:631 \
   -p 8080:8080 \
   --device=/dev/usb/lp0:/dev/usb/lp0 \
+  -v /dev/bus/usb:/dev/bus/usb \
   --ulimit nofile=65536:65536 \
+  -e PRINTER_URI="file:/dev/usb/lp0" \
   -e MQTT_BROKER="192.168.0.71" \
   -e MQTT_USERNAME="your-username" \
   -e MQTT_PASSWORD="your-password" \
@@ -105,11 +107,9 @@ docker run --name printmqttify_container \
   ghcr.io/rainyvalley/receiptmqtt:latest
 ```
 
-Flags: `--privileged` and `--device` give the container USB access to the printer, `-p 631:631` exposes the CUPS web interface, `-p 8080:8080` the control panel, and `--ulimit nofile=65536:65536` avoids file-descriptor issues on newer Docker. Replace the placeholder values with your own — and note these are visible in your shell history, so the Compose override method above is preferable for anything sensitive.
+Flags: `--device` plus the `/dev/bus/usb` bind give the container USB access to the printer, `-p 8080:8080` publishes the (Basic-auth-protected) control panel. CUPS itself is loopback-only inside the container and needs no published port. `PRINTER_URI` must match the `--device` path. Replace the placeholder values with your own — and note these are visible in your shell history, so the Compose override method above is preferable for anything sensitive.
 
-**5. Add the printer in CUPS.** Open `https://<host-ip>:631`, log in with your `ADMIN_USER` / `ADMIN_PASS`, go to **Administration → Add Printer**, select the USB printer, and choose the **ZJ-58** driver for 58 mm rolls (including POS58 clones) or **ZJ-80** for 80 mm. Print a test page to confirm.
-
-**6. Send a test message.** See [Home Assistant](#home-assistant) below, or from a shell:
+**5. Send a test message.** See [Home Assistant](#home-assistant) below, or from a shell:
 
 ```bash
 mosquitto_pub -h <broker> -u <user> -P <pass> -t printer/commands \
@@ -278,7 +278,7 @@ Worth having. A silently dead printer is easy to not notice for a very long time
 This project stands entirely on other people's work — huge thanks to both:
 
 - **[Aesgarth/PrintMQTTify](https://github.com/Aesgarth/PrintMQTTify)** — the original MQTT-to-CUPS print client this is forked from. Released under Creative Commons Zero v1.0 (CC0-1.0). Thank you for building the thing this fork is a small tweak on.
-- **[klirichek/zj-58](https://github.com/klirichek/zj-58)** — the CUPS filter that makes ZJ-58/ZJ-80 and other ESC/POS thermal printers work. Licensed BSD-2-Clause, © Aleksey N. Vinogradov (klirichek). Thank you for reverse-engineering and maintaining this driver. See [`LICENSE.zj-58`](./LICENSE.zj-58) for the full license text, which is retained here as that license requires.
+- **[klirichek/zj-58](https://github.com/klirichek/zj-58)** — the CUPS filter whose ESC/POS output logic this project now ports in Python ([`app/escpos.py`](./app/escpos.py)); it made ZJ-58/ZJ-80 and other ESC/POS thermal printers work before CUPS deprecated PPD drivers. Licensed BSD-2-Clause, © Aleksey N. Vinogradov (klirichek). Thank you for reverse-engineering and maintaining this driver; the license notice is preserved in that repo and applies to the ported logic.
 
 If you find this useful, please go star both of the repositories above — the original authors did the hard parts.
 
@@ -292,4 +292,4 @@ Parts of this fork — code, configuration, and documentation — were written w
 
 ## License
 
-The PrintMQTTify portion follows the upstream project's Creative Commons Zero v1.0 (CC0-1.0) dedication. The bundled ZJ-58/ZJ-80 filter remains under its own BSD-2-Clause license (see [`LICENSE.zj-58`](./LICENSE.zj-58)).
+The PrintMQTTify portion follows the upstream project's Creative Commons Zero v1.0 (CC0-1.0) dedication. The Python port of the ZJ-58/ZJ-80 ESC/POS output logic ([`app/escpos.py`](./app/escpos.py)) remains BSD-2-Clause, © Aleksey N. Vinogradov (klirichek), under the terms of the upstream [`LICENSE.zj-58`](https://github.com/klirichek/zj-58).
