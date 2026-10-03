@@ -1,35 +1,37 @@
-Troubleshooting
+# Troubleshooting
 
-Changing Port Mapping
+## Port mapping
 
-If the default port 631 is already in use by another service (e.g., a host-installed CUPS instance), you can modify the port mapping in the Docker run or Compose configuration:
+The control panel is published on 8080. CUPS needs no published port: it is
+loopback-only inside the container and only receives print-ready bytes from
+the app in-process.
 
-For docker run, replace -p 631:631 with an alternative mapping like -p 1631:631.
+## Control panel
 
-For Docker Compose, update the ports section to:
+Cannot reach the panel:
 
-ports:
-  - "1631:631"
+- Ensure the container is running: `docker logs printmqttify_container`.
+- The panel is protected with HTTP Basic auth; log in with your
+  `ADMIN_USER` / `ADMIN_PASS` values.
+- The container must not be started with `ADMIN_PASS` unset: the entrypoint
+  refuses to start without a password.
 
-Ensure you update the port in the browser URL to match the new mapping (e.g., https://<host-ip>:1631).
+## Printer not printing
 
-Common Issues
+- Check the queue state: `docker exec printmqttify_container lpstat -p`.
+- Verify the queue's device path matches the mapped USB device:
+  `docker exec printmqttify_container lpstat -v` should show
+  `file:/dev/usb/lpN`, and `PRINTER_URI` on the container must match the
+  path given to Compose (`devices:`) — see docs/hardware-notes.md, which
+  also explains how the two USB printers can swap `/dev/usb/lp0` and
+  `/dev/usb/lp1` across reboots.
+- ESC/POS is emitted by the app itself (`app/escpos.py`); there is no CUPS
+  print driver to install, so "wrong driver" cannot be the cause.
 
-Cannot Access CUPS Web Interface:
+## MQTT issues
 
-Ensure the container is running.
-
-Confirm that port 631 is not blocked by a firewall.
-
-Printer Not Printing:
-
-Check the printer status in the CUPS web interface.
-
-Ensure the correct driver is installed.
-
-MQTT Issues:
-
-Verify the MQTT broker details in the container environment variables.
-
-Check the MQTT topic for incoming messages.
-
+- Verify the MQTT broker details in the container environment variables.
+- Check the MQTT topic for incoming messages.
+- From a shell, publish a test message (see README) and watch
+  `docker logs printmqttify_container` for `Received message` followed by
+  `Printed N ESC/POS bytes.`

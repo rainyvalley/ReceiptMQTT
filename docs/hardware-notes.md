@@ -38,29 +38,69 @@ Writing to the kernel character device works, so the queue uses
 
 ## docker-compose
 
-Not in this repo (it holds credentials). The service needs:
+Credentials live in `docker-compose.override.yml` (git-ignored). The service
+needs USB device access, not full privilege:
 
 ```yaml
-    privileged: true
     volumes:
       - /dev/bus/usb:/dev/bus/usb
-      - /dev/usb:/dev/usb
+    devices:
+      - "/dev/usb/lp1:/dev/usb/lp1"
 ```
 
 A pinned `devices:` entry like `/dev/bus/usb/001/004` is what caused a
 ten-day silent outage when the device renumbered to `001/006`.
 
-## Page size
+## From PPD filter to raw queue (2026-10)
 
-`configs/ReceiptPrinter.ppd` is `zj58.ppd` with two short page sizes added
-(`X48MMY60MM`, `X48MMY105MM`) and the default changed to the 60mm one. The
-stock PPD's shortest page was 210mm, and rastertozj pads every job to the
-full declared page length — so a two-line receipt fed eight inches of paper.
+CUPS deprecated and then removed PPD-based drivers (CUPS 3.x has no
+`lpadmin -P`, no `*cupsFilter`). The klirichek/zj-58 driver this fork
+shipped is exactly that kind of filter: a C binary (`rastertozj`) that read
+CUPS raster and PPD options, plus PPDs generated in 2016.
 
-Adding a size means four matching entries (`*PageSize`, `*PageRegion`,
-`*ImageableArea`, `*PaperDimension`) plus a `*ru.PageSize` translation line,
-or `cupstestppd` fails. Note `*PageRegion` uses width 164 where the others
-use 136.
+The pipeline is now driverless on the CUPS side:
+
+    reportlab PDF -> ghostscript pbmraw (1bpp, 203dpi, 384px wide)
+                  -> app/escpos.py (port of rastertozj's emission logic)
+                  -> lp -d ReceiptPrinter on a raw queue (file:/dev/usb/lpN)
+
+What was ported, byte-for-byte, from rastertozj.c:
+
+- `GS v 0 0` raster bands, max 24 rows each, width capped at 384 px
+  (48 bytes).
+- Blank bands are skipped with `ESC J 24` — printed out only when
+  `BLANK_SPACE=0`, the old `BlankSpace=0Print` choice.
+- Page end: `ESC J 0x18` repeated `FEED_DIST` times (PPD default was
+  `2feed9mm` -> 2), then `ESC i` cut when `CUTTING=1`
+  (`CutAtTheEndOfPage`); `CUTTING=2` cuts at job end.
+- Cash drawers: `ESC p 0/1 0x40 0x50` before print (`*_DRAWER*=1`) or
+  after (`=2`), wrapped around `ESC @` init/reset in the same order the C
+  filter used.
+- gs `pbmraw` rows are packed 1 bpp, black=1 — identical bit polarity to
+  CUPS raster and to ESC/POS `GS v 0`, so bands transfer without
+  repacking.
+
+The old PPD options are environment variables on the container:
+`FEED_DIST`, `BLANK_SPACE`, `CUTTING`, `CASH_DRAWER1`, `CASH_DRAWER2`
+(numeric choice indexes, same meaning as before; defaults 2/1/1/0/0).
+CUPS itself only needs `-m raw` now, which survives on CUPS 2.4 and 3.x
+alike. The `file:` backend and `FileDevice Yes` are unchanged — that leg
+never touched the filter chain.
+
+Regression gate: `scripts/smoke_test.sh` regenerates the ESC/POS stream
+with real ghostscript in CI; to re-gate against real hardware, capture a
+known-good receipt with `cat /dev/usb/lp1` during a print and byte-diff
+against `printer_mqtt_handler.print_job()` output.
+
+## Page length (was a PPD matter)
+
+The old PPD page sizes (`X48MMY60MM` etc.) became ghostscript geometry:
+`RASTER_WIDTH_PX=384` x `RASTER_HEIGHT_PX` raster lines at 203 dpi. The
+historical lesson still applies: rastertozj padded every job to the full
+declared page length, so with a 210 mm declared page a two-line receipt fed
+eight inches of paper. The reportlab stage sizes each receipt's PDF to its
+own content, and `RASTER_HEIGHT_PX` only caps that — short receipts stay
+short. The 60 mm default lives on as the 480-line raster height.
 
 ## Paper sensor
 
