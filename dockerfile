@@ -17,7 +17,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     cups \
     cups-client \
     ghostscript \
-    avahi-daemon \
     dbus \
     python3 \
     python3-paho-mqtt \

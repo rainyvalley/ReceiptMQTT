@@ -41,14 +41,10 @@ else
   echo "Admin user already exists."
 fi
 
-# Start D-Bus (avahi-daemon will not start without it)
+# Start D-Bus
 echo "Starting D-Bus..."
 mkdir -p /var/run/dbus
 service dbus start || true
-
-# Start Avahi Daemon
-echo "Starting Avahi Daemon..."
-service avahi-daemon start || true
 
 # Stop any running CUPS processes
 echo "Ensuring no conflicting CUPS processes..."
@@ -93,7 +89,7 @@ cupsenable "$PRINTER_NAME"
 
 # Tail the CUPS log in the background
 echo "Tailing CUPS logs..."
-tail -f /var/log/cups/error_log &
+tail -F /var/log/cups/error_log &
 
 # Start the Flask web control panel
 echo "Starting Flask web control panel..."

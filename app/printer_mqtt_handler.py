@@ -152,7 +152,11 @@ def on_connect(client, userdata, flags, rc):
         # Start publishing availability
         publish_availability(client)
     else:
-        print(f"Failed to connect, return code {rc}")
+        reasons = {1: "unacceptable protocol version", 2: "identifier rejected",
+                   3: "server unavailable", 4: "bad username or password",
+                   5: "not authorized"}
+        print(f"Failed to connect, return code {rc} "
+              f"({reasons.get(rc, 'unknown reason')})")
 
 
 
