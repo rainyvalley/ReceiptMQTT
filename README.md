@@ -36,19 +36,39 @@ git clone https://github.com/rainyvalley/ReceiptMQTT.git
 cd ReceiptMQTT
 ```
 
-**2. Build the image:**
+**2. Choose your install method.**
+
+### Option A: pull the prebuilt image (recommended)
+
+CI publishes a multi-arch image (`linux/amd64` and `linux/arm64`) to GHCR on every push to `main` and on version tags. Pull it:
 
 ```bash
-docker build -t printmqttify .
+docker pull ghcr.io/rainyvalley/receiptmqtt:latest
 ```
+
+The tracked `docker-compose.yml` already points at that image, so Compose pulls it for you on first `up`.
+
+Tags available: `latest` (tracks `main`), `sha-<commit>` for every build, and semver tags (`1.2.3`, `1.2`) if you cut `v*` tags. Builds are cached and deterministic; the `rastertozj` filter is compiled from the bundled source in-image, not shipped as a binary.
+
+### Option B: build locally
+
+```bash
+docker compose build
+# or
+docker build -t ghcr.io/rainyvalley/receiptmqtt:local .
+```
+
+To use a locally built image with Compose, override `image:` in your local `docker-compose.override.yml` (see step 3).
 
 **3. Configure your broker details.**
 
-The tracked `docker-compose.yml` ships with placeholder values on purpose — do **not** commit real credentials into it. Put your real broker IP, username, and password in a local `docker-compose.override.yml` (git-ignored), which Compose merges automatically:
+The tracked `docker-compose.yml` ships with placeholder values on purpose — do **not** commit real credentials into it. Put your real broker IP, username, password, USB device path, and (for local builds) the `image:` override in a local `docker-compose.override.yml` (git-ignored), which Compose merges automatically:
 
 ```yaml
 services:
   printmqttify:
+    # only needed for a locally built image, not for the GHCR pull:
+    # image: ghcr.io/rainyvalley/receiptmqtt:local
     environment:
       - MQTT_BROKER=192.168.0.71        # your broker IP
       - MQTT_USERNAME=your-username
@@ -82,7 +102,7 @@ docker run --name printmqttify_container \
   -e MQTT_TOPIC="printer/commands" \
   -e ADMIN_USER="admin" \
   -e ADMIN_PASS="your-cups-admin-pass" \
-  printmqttify
+  ghcr.io/rainyvalley/receiptmqtt:latest
 ```
 
 Flags: `--privileged` and `--device` give the container USB access to the printer, `-p 631:631` exposes the CUPS web interface, `-p 8080:8080` the control panel, and `--ulimit nofile=65536:65536` avoids file-descriptor issues on newer Docker. Replace the placeholder values with your own — and note these are visible in your shell history, so the Compose override method above is preferable for anything sensitive.
