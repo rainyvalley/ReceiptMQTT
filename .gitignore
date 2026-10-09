@@ -13,3 +13,7 @@ AGENTS.md
 
 # Local revert helper script (run manually, never committed)
 revert-to-legacy.sh
+
+# Local migration notes; tracked on beta where this work lives, keep out of
+# main-visible docs otherwise
+nextsteps.md

@@ -10,7 +10,7 @@ This is a fork of [Aesgarth/PrintMQTTify](https://github.com/Aesgarth/PrintMQTTi
 
 - Runs a CUPS server in a container and listens on an MQTT topic for print jobs.
 - Formats incoming messages for narrow thermal roll paper (58 mm / 80 mm).
-- Renders each receipt to a bitmap (ghostscript) and emits ESC/POS directly, then queues the raw bytes via CUPS — no PPDs, no CUPS filters, works identically on amd64 and arm64, and on CUPS 2.4 or 3.x.
+- Renders each receipt to a bitmap (ghostscript) and emits ESC/POS directly, then queues the raw bytes via CUPS — no PPDs, no CUPS filters, works identically on amd64 and arm64, and on CUPS 2.4, 2.5 or 3.x (the image builds on Debian trixie with CUPS 2.5).
 - Works with USB ESC/POS printers: ZJ-58/ZJ-80 and POS58-class clones, which report varied USB vendor strings (e.g. `STMicroelectronics` / `POS58 Printer USB`) but take the same ESC/POS.
 - Optional web control panel (Basic-auth protected) for status and test prints.
 
@@ -50,7 +50,7 @@ docker pull ghcr.io/rainyvalley/receiptmqtt:latest
 
 The tracked `docker-compose.yml` already points at that image, so Compose pulls it for you on first `up`.
 
-Tags available: `latest` (tracks `main`), `sha-<commit>` for every build, and semver tags (`1.2.3`, `1.2`) if you cut `v*` tags. CI also runs the pipeline smoke test on every push before publishing. There is no CUPS printer driver inside the image at all: printing is done in-app (reportlab -> ghostscript -> ESC/POS) straight to a raw CUPS queue, so the image is identical on amd64 and arm64.
+Tags available: `latest` (tracks `main`), `beta` (tracks the `beta` branch - test builds before they land on `main`), `sha-<commit>` for every build, and semver tags (`1.2.3`, `1.2`) if you cut `v*` tags. CI also runs the pipeline smoke test on every push before publishing. There is no CUPS printer driver inside the image at all: printing is done in-app (reportlab -> ghostscript -> ESC/POS) straight to a raw CUPS queue, so the image is identical on amd64 and arm64.
 
 ### Option B: build locally
 

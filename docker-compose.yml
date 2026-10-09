@@ -2,20 +2,19 @@ services:
   printmqttify:
     image: ghcr.io/rainyvalley/receiptmqtt:latest
     container_name: printmqttify_container
-    privileged: true
     ports:
-      - "1631:631"
       - "8080:8080"
     # USB device mapping lives in docker-compose.override.yml per host;
     # never pin a /dev/bus/usb/NNN/NNN path here (renumbering broke
     # printing for ten days once).
     environment:
+      - PRINTER_URI=file:/dev/usb/lp1
       - MQTT_BROKER=your-broker-ip
-      - MQTT_USERNAME=mqtt-username
-      - MQTT_PASSWORD=password
+      - MQTT_USERNAME=your-username
+      - MQTT_PASSWORD=your-password
       - MQTT_TOPIC=printer/commands
       - ADMIN_USER=admin
-      - ADMIN_PASS=adminpassword
+      - ADMIN_PASS=your-cups-admin-pass
     ulimits:
       nofile:
         soft: 65536
