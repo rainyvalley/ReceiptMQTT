@@ -45,6 +45,9 @@ RASTER_HEIGHT_PX = int(os.getenv("RASTER_HEIGHT_PX", "480"))
 # data, so this works even while a job is running.
 PAPER_QUERY = b"\x10\x04\x04"
 
+POLL_TIMEOUT = 0.25       # select wait per attempt
+POLL_ATTEMPTS = 3         # <=0.75s total hold; jobs hitting EBUSY retry
+
 
 def query_paper():
     """Ask the printer whether it has paper.
@@ -62,10 +65,14 @@ def query_paper():
     try:
         fd = os.open(printer_device, os.O_RDWR | os.O_NONBLOCK)
         os.write(fd, PAPER_QUERY)
-        ready, _, _ = select.select([fd], [], [], 1.0)
-        if not ready:
-            return None
-        response = os.read(fd, 8)
+        response = b""
+        for _ in range(POLL_ATTEMPTS):
+            ready, _, _ = select.select([fd], [], [], POLL_TIMEOUT)
+            if not ready:
+                continue
+            response = os.read(fd, 8)
+            if response:
+                break
         if not response:
             return None
         status = response[-1]
@@ -144,15 +151,26 @@ def publish_availability(client, interval=60):
 
     thread = threading.Thread(target=publish_status, daemon=True)
     thread.start()
+    return thread
 
+
+AVAILABILITY_THREAD = None
 
 def on_connect(client, userdata, flags, rc):
     """Callback for when the client connects to the MQTT broker."""
+    global AVAILABILITY_THREAD
     if rc == 0:
         print("Connected to MQTT broker!")
-        client.subscribe(topic)
-        # Start publishing availability
-        publish_availability(client)
+        # QoS 1 subscription: paho delivers retained/queued messages at the
+        # subscription QoS, so a QoS 0 default would drop HA's qos-2 publishes
+        # that arrive while the container is disconnected. Clean session
+        # still loses genuine broker-offline messages - that is inherent.
+        client.subscribe(topic, qos=1)
+        # Start publishing availability - ONCE. paho calls on_connect again
+        # on every auto-reconnect; spawning the thread here would accumulate
+        # duplicate 60s pollers per outage (and multiply device openers).
+        if AVAILABILITY_THREAD is None or not AVAILABILITY_THREAD.is_alive():
+            AVAILABILITY_THREAD = publish_availability(client)
     else:
         reasons = {1: "unacceptable protocol version", 2: "identifier rejected",
                    3: "server unavailable", 4: "bad username or password",
@@ -162,9 +180,14 @@ def on_connect(client, userdata, flags, rc):
 
 
 
+MAX_MESSAGE_CHARS = 65536    # MQTT intake cap: one line ≈ 19pt of page
+
 def on_message(client, userdata, msg):
     """Callback for when a message is received."""
-    payload_text = msg.payload.decode(errors="replace")
+    # errors="ignore": replace would turn one bad byte into U+FFFD, which
+    # reportlab's WinAnsi fonts cannot encode - the whole receipt would be
+    # silently dropped. Dropping bad bytes keeps the rest printable.
+    payload_text = msg.payload.decode(errors="ignore")
     print(f"Received message on topic {msg.topic}")
     try:
         payload = json.loads(payload_text)
@@ -175,8 +198,15 @@ def on_message(client, userdata, msg):
         if not printer_name:
             raise ValueError("Missing 'printer_name' in payload")
 
-        # PDF -> pbmraw raster -> ESC/POS -> printer device (or lp fallback)
-        escpos_bytes = print_job(title, message, printer_name)
+        # Cap intake: page height and gs raster memory scale with the
+        # message; a 64KB message already means a several-meter receipt.
+        if len(message) > MAX_MESSAGE_CHARS:
+            message = message[:MAX_MESSAGE_CHARS]
+            print(f"Message truncated to {MAX_MESSAGE_CHARS} chars")
+
+        # PDF -> pbmraw raster -> ESC/POS -> printer device (direct write;
+        # EBUSY retries while the paper poll holds the device)
+        print_job(title, message, printer_name)
 
     except json.JSONDecodeError as e:
         print(f"Error decoding JSON: {e}")
@@ -260,9 +290,13 @@ def pdf_to_escpos(pdf_path, settings):
     """
     gs = subprocess.run(
         ["gs", "-dQUIET", "-dSAFER", "-dBATCH", "-dNOPAUSE", "-dNOPROMPT",
-         f"-sOutputFile=%stdout",
-         f"-sDEVICE=pbmraw", f"-r{RASTER_DPI_X}x{RASTER_DPI_Y}",
+         "-sOutputFile=%stdout",
+         "-sDEVICE=pbmraw", f"-r{RASTER_DPI_X}x{RASTER_DPI_Y}",
          f"-g{RASTER_WIDTH_PX}x{RASTER_HEIGHT_PX}",
+         # -dFIXEDMEDIA: without it a PDF taller than -g RESIZES the output
+         # device instead of clipping, making RASTER_HEIGHT_PX meaningless
+         # and raster memory unbounded. With it, -g is a hard crop.
+         "-dFIXEDMEDIA",
          "-dTextAlphaBits=4", "-dGraphicsAlphaBits=1",
          pdf_path],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
@@ -287,32 +321,42 @@ def _write_device(path, data):
         os.close(fd)
 
 
+DEVICE_BUSY_RETRIES = 8      # EBUSY: paper poll or another job holds usblp
+DEVICE_BUSY_BACKOFF = 0.25   # seconds between retries (2s worst case)
+
+
 def send_raw_to_printer(printer_name, escpos_bytes):
     """Deliver a pre-rendered ESC/POS bytestring to the printer.
 
-    Prefers a direct write to the printer character device (PRINTER_DEVICE).
-    CUPS is deliberately out of the data path: on CUPS 2.4.10+ its file:
-    backend refuses to write for 'raw' queues (file devices cannot be used
-    with raw print queues - a PPD is required), which silently completed
-    jobs with zero bytes delivered. A direct write is verifiable: the bytes
-    either reach the device or the exception says why not.
+    Writes directly to the printer character device (PRINTER_DEVICE).
+    CUPS is deliberately out of the data path: its file: backend refuses
+    to write for 'raw' queues (file devices cannot be used with raw print
+    queues - a PPD is required), which silently completed jobs here with
+    zero bytes delivered while reporting success. A direct write is
+    verifiable: bytes reach the device or the exception says why not.
 
-    Falls back to lp on a CUPS queue only when PRINTER_DEVICE is unset or
-    unopenable AND a queue of that name exists (covers exotic setups).
+    EBUSY is retried, not fatal: the 60s paper poll holds the device for
+    up to a second (usblp allows a single opener), and falling through
+    from there to lp would be the old silent-loss black hole again.
+    Enodev/EIO are reported loudly and left failing - no fake success.
     """
-    if printer_device:
+    if not printer_device:
+        raise RuntimeError("PRINTER_DEVICE is not set; no printer to write to")
+    last_err = None
+    for attempt in range(DEVICE_BUSY_RETRIES):
         try:
             n = _write_device(printer_device, escpos_bytes)
             print(f"Wrote {n} ESC/POS bytes to {printer_device}.")
             return
         except OSError as e:
-            print(f"Direct write to {printer_device} failed: {e}; "
-                  "falling back to lp queue")
-    result = subprocess.run(
-        ["lp", "-d", printer_name, "/dev/stdin"],
-        input=escpos_bytes,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
-    print(f"Queued: {result.stdout.decode().strip()}")
+            if e.errno == errno.EBUSY:
+                last_err = e
+                print(f"Device busy (attempt {attempt + 1}/{DEVICE_BUSY_RETRIES}); "
+                      "retrying shortly")
+                time.sleep(DEVICE_BUSY_BACKOFF)
+                continue
+            raise
+    raise last_err
 
 
 def print_job(title, message, printer_name):
@@ -349,18 +393,18 @@ if __name__ == "__main__":
     else:
         client = None
 
-    # Set username and password if provided
     if username and password:
         client.username_pw_set(username, password)
 
-    # Assign callback functions
     client.on_connect = on_connect
     client.on_message = on_message
+    # LWT: if the container dies without a disconnect packet, the broker
+    # flips the retained availability to offline so HA's offline alert
+    # (README) can actually fire instead of the stale "online" standing.
+    client.will_set(availability_topic, "offline", qos=1, retain=True)
 
-    # Connect to the broker
     try:
         client.connect(broker, 1883, 60)
-        # Start the MQTT loop
         client.loop_forever()
     except Exception as e:
         print(f"Failed to start MQTT handler: {e}")

@@ -1,6 +1,6 @@
 services:
   printmqttify:
-    image: ghcr.io/rainyvalley/receiptmqtt:latest
+    image: ghcr.io/rainyvalley/receiptmqtt:${IMAGE_TAG:-latest}
     container_name: printmqttify_container
     ports:
       - "8080:8080"
@@ -8,18 +8,16 @@ services:
     # never pin a /dev/bus/usb/NNN/NNN path here (renumbering broke
     # printing for ten days once).
     environment:
-      - PRINTER_DEVICE=/dev/usb/lp1
-      - PAPER_DEVICE=/dev/usb/lp1
+      - PRINTER_DEVICE=${PRINTER_DEVICE:-/dev/usb/lp1}
       # Match the production queue options the old PPD stack ran with
       # (FeedDist=0feed3mm, Cutting=0NoCutting): no extra feed, no cut.
       - FEED_DIST=0
       - CUTTING=0
-      - MQTT_BROKER=your-broker-ip
-      - MQTT_USERNAME=your-username
-      - MQTT_PASSWORD=your-password
-      - MQTT_TOPIC=printer/commands
-      - ADMIN_USER=admin
-      - ADMIN_PASS=your-cups-admin-pass
+      - MQTT_BROKER=${MQTT_BROKER:-your-broker-ip}
+      - MQTT_USERNAME=${MQTT_USERNAME:-your-username}
+      - MQTT_PASSWORD=${MQTT_PASSWORD:? .env must set MQTT_PASSWORD}
+      - ADMIN_USER=${ADMIN_USER:-admin}
+      - ADMIN_PASS=${ADMIN_PASS:? .env must set ADMIN_PASS}
     ulimits:
       nofile:
         soft: 65536

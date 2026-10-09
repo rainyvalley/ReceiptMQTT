@@ -12,9 +12,12 @@ configuration happens through container environment variables.
 """
 
 import functools
+import hmac
 import os
 import subprocess
 
+import escpos
+from printer_mqtt_handler import _write_device, printer_device
 from flask import Flask, render_template, request, jsonify, Response
 
 app = Flask(__name__)
@@ -28,7 +31,23 @@ MQTT_TOPIC = os.getenv("MQTT_TOPIC", "printer/commands")
 
 
 def check_auth(username, password):
-    return username == cups_admin_user and password == cups_admin_pass
+    # constant-time compares; the '&' forces both evaluations so username
+    # and password both get the same treatment
+    return hmac.compare_digest(username, cups_admin_user) and \
+        hmac.compare_digest(password, cups_admin_pass)
+
+
+def device_probe():
+    """Can we open the printer device right now? lpstat says nothing about
+    the USB device; this is what /status should really show."""
+    if not printer_device:
+        return "no PRINTER_DEVICE configured"
+    try:
+        fd = os.open(printer_device, os.O_WRONLY)
+        os.close(fd)
+        return f"{printer_device} open OK"
+    except OSError as e:
+        return f"{printer_device}: {e.strerror or e}"
 
 
 def require_auth(f):
@@ -50,31 +69,39 @@ def index():
     return render_template('index.html', mqtt_topic=MQTT_TOPIC)
 
 
-@app.route('/status', methods=['GET'])
+@app.route('/status')
 @require_auth
 def status():
-    """Get the current status of the system."""
+    """Queue state AND the live device-probe result."""
     try:
-        # Get printers from CUPS
         printers = subprocess.check_output(["lpstat", "-p"], text=True)
-        return jsonify({"printers": printers.strip().split("\n")})
-    except Exception as e:
-        return jsonify({"error": "lpstat failed: see container logs"})
+        printers = printers.strip().split("\n")
+    except Exception:
+        printers = ["lpstat failed: see container logs"]
+    return jsonify({"printers": printers, "device": device_probe()})
 
 
 @app.route('/test-print', methods=['POST'])
 @require_auth
 def test_print():
-    """Send a test print command against the bundled test page."""
+    """Print the internal test pattern directly to the printer device.
+
+    The old panel sent a text file via lp onto the raw+file: queue, which
+    CUPS silently discards (zero bytes to the device). This runs the same
+    selftest raster the app prints, byte-for-byte.
+    """
     printer_name = request.form.get("printer_name", "ReceiptPrinter")
     if not printer_name.isalnum():
         return jsonify({"success": False, "error": "invalid printer name"})
     try:
-        result = subprocess.run(["lp", "-d", printer_name, "/app/test_print.txt"],
-                                check=True, capture_output=True, text=True)
-        return jsonify({"success": True, "output": result.stdout})
-    except subprocess.CalledProcessError as e:
-        return jsonify({"success": False, "error": "print failed: see container logs"})
+        settings = escpos.EscposSettings.from_env()
+        pbm = escpos.selftest_pbm()
+        escpos_bytes, _pages = escpos.render_all(pbm, settings)
+        n = _write_device(printer_device, escpos_bytes)
+        return jsonify({"success": True,
+                        "output": f"wrote {n} bytes to {printer_device}"})
+    except OSError as e:
+        return jsonify({"success": False, "error": f"{printer_device}: {e}"})
 
 
 if __name__ == '__main__':
