@@ -1,9 +1,11 @@
 """ESC/POS emission for ZJ-58/ZJ-80-class thermal receipt printers.
 
 Python port of the rastertozj CUPS filter logic (klirichek/zj-58, BSD-2-Clause),
-so the deprecated PPD-based CUPS filter chain can be replaced with a raw
-queue: PDF -> Ghostscript pbmraw (1 bpp packed, black=1) -> this module ->
-lp on a raw CUPS queue.
+so the deprecated PPD-based CUPS filter chain is not needed:
+PDF -> Ghostscript pbmraw (1 bpp packed, black=1) -> this module ->
+direct write to PRINTER_DEVICE.
+
+Copyright (c) 2014, Aleksey N. Vinogradov. BSD-2-Clause; see LICENSE.zj-58.
 
 The PPD options the C filter read (CashDrawer1Setting, CashDrawer2Setting,
 BlankSpace, FeedDist, Cutting) are carried over as environment variables with
