@@ -2,7 +2,7 @@
 
 A Docker-based bridge between MQTT and a USB thermal printer, aimed at cheap ESC/POS thermal receipt printers (Zijiang **ZJ-58** / **ZJ-80**, the widely rebadged **POS58**, and compatible clones). Publish a message to an MQTT topic — from Home Assistant, Node-RED, or anything else — and it prints.
 
-This is a fork of [Aesgarth/PrintMQTTify](https://github.com/Aesgarth/PrintMQTTify). The bundled SEWOO driver was first replaced with the **ZJ-58/ZJ-80** CUPS filter from [klirichek/zj-58](https://github.com/klirichek/zj-58), and that filter's ESC/POS output logic is now ported into the app itself (`app/escpos.py`), because CUPS deprecated PPD-based drivers. Printed output is cleaned up too (branding removed, vertical separators, text wrapping).
+This started as a fork of [Aesgarth/PrintMQTTify](https://github.com/Aesgarth/PrintMQTTify), and its printer support started from the **ZJ-58/ZJ-80** CUPS driver by [klirichek/zj-58](https://github.com/klirichek/zj-58). Neither driver is used any more: the ESC/POS encoding was rewritten in Python (`app/escpos.py`, ported from klirichek's filter) and printing goes straight to the device. Printed output is cleaned up too (branding removed, vertical separators, text wrapping).
 
 ---
 
@@ -283,12 +283,12 @@ Worth having. A silently dead printer is easy to not notice for a very long time
 
 ## Credits & thanks
 
-This project stands entirely on other people's work — huge thanks to both:
+This project wouldn't exist without the starting points these two gave it — huge thanks to both:
 
-- **[Aesgarth/PrintMQTTify](https://github.com/Aesgarth/PrintMQTTify)** — the original MQTT-to-CUPS print client this is forked from. Released under Creative Commons Zero v1.0 (CC0-1.0). Thank you for building the thing this fork is a small tweak on.
-- **[klirichek/zj-58](https://github.com/klirichek/zj-58)** — the CUPS filter whose ESC/POS output logic this project now ports in Python ([`app/escpos.py`](./app/escpos.py)); it made ZJ-58/ZJ-80 and other ESC/POS thermal printers work before CUPS deprecated PPD drivers. Licensed BSD-2-Clause, © Aleksey N. Vinogradov (klirichek). Thank you for reverse-engineering and maintaining this driver; the license notice is preserved in that repo and applies to the ported logic.
+- **[Aesgarth/PrintMQTTify](https://github.com/Aesgarth/PrintMQTTify)** — the original MQTT-to-CUPS print client this project grew out of. Released under Creative Commons Zero v1.0 (CC0-1.0). Thank you for the foundation.
+- **[klirichek/zj-58](https://github.com/klirichek/zj-58)** — the ZJ-58/ZJ-80 CUPS driver that got these printers working in the first place. The driver itself is no longer used here, but [`app/escpos.py`](./app/escpos.py) is a Python port of its ESC/POS output logic. Licensed BSD-2-Clause, © Aleksey N. Vinogradov (klirichek); the notice is kept in [`LICENSE.zj-58`](./LICENSE.zj-58). Thank you for reverse-engineering these printers.
 
-If you find this useful, please go star both of the repositories above — the original authors did the hard parts.
+If you find this useful, please go star both repositories above.
 
 ---
 
@@ -300,4 +300,4 @@ Parts of this fork — code, configuration, and documentation — were written w
 
 ## License
 
-The PrintMQTTify portion follows the upstream project's Creative Commons Zero v1.0 (CC0-1.0) dedication. The Python port of the ZJ-58/ZJ-80 ESC/POS output logic ([`app/escpos.py`](./app/escpos.py)) remains BSD-2-Clause, © Aleksey N. Vinogradov (klirichek), under the terms of the upstream [`LICENSE.zj-58`](https://github.com/klirichek/zj-58).
+The PrintMQTTify portion follows the upstream project's Creative Commons Zero v1.0 (CC0-1.0) dedication. The Python port of the ZJ-58/ZJ-80 ESC/POS output logic ([`app/escpos.py`](./app/escpos.py)) remains BSD-2-Clause, © Aleksey N. Vinogradov (klirichek), under the terms in [`LICENSE.zj-58`](./LICENSE.zj-58).
