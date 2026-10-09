@@ -8,7 +8,7 @@
 #    skipped silently on hosts that cannot install it (PEP 668).
 #
 # Optional hardware-free CUPS leg: start the container with
-# PRINTER_URI=file:/tmp/out.bin, publish an MQTT test message, and check
+# PRINTER_DEVICE=/tmp/out.bin, publish an MQTT test message, and check
 # /tmp/out.bin for the expected bytes below.
 set -euo pipefail
 

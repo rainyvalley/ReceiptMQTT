@@ -29,7 +29,7 @@ topic = os.getenv("MQTT_TOPIC", "printer/commands")
 availability_topic = "printer/availability"
 paper_topic = os.getenv("MQTT_PAPER_TOPIC", "printer/paper")
 paper_low_topic = os.getenv("MQTT_PAPER_LOW_TOPIC", "printer/paper_low")
-paper_device = os.getenv("PAPER_DEVICE", "/dev/usb/lp1")
+printer_device = os.getenv("PRINTER_DEVICE", os.getenv("PAPER_DEVICE", "/dev/usb/lp1"))
 
 # Default receipt printer settings: ghostscript renders the reportlab PDF at
 # 203 dpi into a 384 px wide raster (48 mm roll), matching the old PPD's
@@ -60,7 +60,7 @@ def query_paper():
     """
     fd = None
     try:
-        fd = os.open(paper_device, os.O_RDWR | os.O_NONBLOCK)
+        fd = os.open(printer_device, os.O_RDWR | os.O_NONBLOCK)
         os.write(fd, PAPER_QUERY)
         ready, _, _ = select.select([fd], [], [], 1.0)
         if not ready:
@@ -122,7 +122,7 @@ def publish_availability(client, interval=60):
             result = query_paper()
             if result is None:
                 if not warned_no_sensor and last_paper is None:
-                    print(f"No paper status from {paper_device} "
+                    print(f"No paper status from {printer_device} "
                           "(printer may be unidirectional)")
                     warned_no_sensor = True
             else:
@@ -175,9 +175,8 @@ def on_message(client, userdata, msg):
         if not printer_name:
             raise ValueError("Missing 'printer_name' in payload")
 
-        # PDF -> pbmraw raster -> ESC/POS -> lp raw queue
+        # PDF -> pbmraw raster -> ESC/POS -> printer device (or lp fallback)
         escpos_bytes = print_job(title, message, printer_name)
-        print(f"Printed {len(escpos_bytes)} ESC/POS bytes.")
 
     except json.JSONDecodeError as e:
         print(f"Error decoding JSON: {e}")
@@ -271,24 +270,49 @@ def pdf_to_escpos(pdf_path, settings):
     return out
 
 
-def send_raw_to_printer(printer_name, escpos_bytes):
-    """Queue a pre-rendered ESC/POS bytestring on a raw CUPS queue."""
-    fd, raw_path = tempfile.mkstemp(prefix="print_job_", suffix=".escpos")
+def _write_device(path, data):
+    """Write data to a character device or regular file, all of it.
+
+    O_SYNC so bytes hit the printer before we report success; EBUSY is
+    translated to a clean failure message (CUPS holding the device is no
+    longer possible - the queue no longer opens it - but keep the guard).
+    """
+    fd = os.open(path, os.O_WRONLY | os.O_SYNC)
     try:
-        with os.fdopen(fd, "wb") as fh:
-            fh.write(escpos_bytes)
-        result = subprocess.run(
-            ["lp", "-d", printer_name, raw_path],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
-        print(f"Queued: {result.stdout.decode().strip()}")
-    except subprocess.CalledProcessError as e:
-        print(f"Failed to print. Error: {e.stderr.decode()}")
-        raise
+        written = 0
+        while written < len(data):
+            written += os.write(fd, data[written:])
+        return written
     finally:
+        os.close(fd)
+
+
+def send_raw_to_printer(printer_name, escpos_bytes):
+    """Deliver a pre-rendered ESC/POS bytestring to the printer.
+
+    Prefers a direct write to the printer character device (PRINTER_DEVICE).
+    CUPS is deliberately out of the data path: on CUPS 2.4.10+ its file:
+    backend refuses to write for 'raw' queues (file devices cannot be used
+    with raw print queues - a PPD is required), which silently completed
+    jobs with zero bytes delivered. A direct write is verifiable: the bytes
+    either reach the device or the exception says why not.
+
+    Falls back to lp on a CUPS queue only when PRINTER_DEVICE is unset or
+    unopenable AND a queue of that name exists (covers exotic setups).
+    """
+    if printer_device:
         try:
-            os.unlink(raw_path)
-        except OSError:
-            pass
+            n = _write_device(printer_device, escpos_bytes)
+            print(f"Wrote {n} ESC/POS bytes to {printer_device}.")
+            return
+        except OSError as e:
+            print(f"Direct write to {printer_device} failed: {e}; "
+                  "falling back to lp queue")
+    result = subprocess.run(
+        ["lp", "-d", printer_name, "/dev/stdin"],
+        input=escpos_bytes,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+    print(f"Queued: {result.stdout.decode().strip()}")
 
 
 def print_job(title, message, printer_name):
@@ -307,6 +331,7 @@ def print_job(title, message, printer_name):
             pass
 
     send_raw_to_printer(printer_name, escpos_bytes)
+    print(f"Printed {len(escpos_bytes)} ESC/POS bytes.")
     return escpos_bytes
 
 

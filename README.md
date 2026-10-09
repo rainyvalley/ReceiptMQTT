@@ -97,7 +97,7 @@ docker run --name printmqttify_container \
   --device=/dev/usb/lp0:/dev/usb/lp0 \
   -v /dev/bus/usb:/dev/bus/usb \
   --ulimit nofile=65536:65536 \
-  -e PRINTER_URI="file:/dev/usb/lp0" \
+  -e PRINTER_DEVICE="/dev/usb/lp0" \
   -e MQTT_BROKER="192.168.0.71" \
   -e MQTT_USERNAME="your-username" \
   -e MQTT_PASSWORD="your-password" \
@@ -107,7 +107,7 @@ docker run --name printmqttify_container \
   ghcr.io/rainyvalley/receiptmqtt:latest
 ```
 
-Flags: `--device` plus the `/dev/bus/usb` bind give the container USB access to the printer, `-p 8080:8080` publishes the (Basic-auth-protected) control panel. CUPS itself is loopback-only inside the container and needs no published port. `PRINTER_URI` must match the `--device` path. Replace the placeholder values with your own — and note these are visible in your shell history, so the Compose override method above is preferable for anything sensitive.
+Flags: `--device` plus the `/dev/bus/usb` bind give the container USB access to the printer, `-p 8080:8080` publishes the (Basic-auth-protected) control panel. CUPS itself is loopback-only inside the container and needs no published port; it is monitoring-only — the app writes ESC/POS bytes straight to `PRINTER_DEVICE`, which must match the `--device` path. Replace the placeholder values with your own — and note these are visible in your shell history, so the Compose override method above is preferable for anything sensitive.
 
 **5. Send a test message.** See [Home Assistant](#home-assistant) below, or from a shell:
 

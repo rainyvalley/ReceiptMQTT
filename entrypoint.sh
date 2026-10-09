@@ -63,12 +63,16 @@ fi
 # Wait for CUPS to initialize
 sleep 2
 
-# Ensure ReceiptPrinter exists and is configured as a raw queue.
-# Printing is done entirely in-app (PDF -> ghostscript pbmraw ->
-# app/escpos.py -> ESC/POS bytes), so CUPS needs no PPD and no filter
-# chain; it only moves bytes to the file-device backend.
+# Keep a CUPS queue for monitoring (lpstat -p in the availability thread).
+# It is NOT in the data path: the handler writes ESC/POS bytes straight to
+# PRINTER_DEVICE. CUPS 2.4.10+ silently completes jobs on raw+file: queues
+# without writing anything ("File devices cannot be used with 'raw' print
+# queues - a PPD is required"), so printing must not go through lp.
+# The queue's file: URI needs FileDevice Yes (set in cups-files.conf);
+# PRINTER_URI defaults to the same device the handler writes.
 PRINTER_NAME=${PRINTER_NAME:-ReceiptPrinter}
-PRINTER_URI=${PRINTER_URI:-file:/dev/usb/lp1}
+PRINTER_DEVICE=${PRINTER_DEVICE:-${PAPER_DEVICE:-/dev/usb/lp1}}
+PRINTER_URI=${PRINTER_URI:-file:$PRINTER_DEVICE}
 
 if ! lpstat -p "$PRINTER_NAME" > /dev/null 2>&1; then
   echo "Creating $PRINTER_NAME..."
@@ -93,11 +97,12 @@ tail -F /var/log/cups/error_log &
 
 # Start the Flask web control panel
 echo "Starting Flask web control panel..."
-python3 /app/web_control_panel.py &
+python3 -u /app/web_control_panel.py &
 
-# Start the MQTT handler
+# Start the MQTT handler (-u: its stdout is a pipe; unbuffered so prints
+# appear in docker logs immediately)
 echo "Starting MQTT handler..."
-python3 /app/printer_mqtt_handler.py
+python3 -u /app/printer_mqtt_handler.py
 if [ $? -ne 0 ]; then
   echo "Failed to start MQTT handler."
   exit 1
