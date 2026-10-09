@@ -17,8 +17,6 @@ import sys
 ESC = 0x1B
 GS = 0x1D
 
-INIT = bytes((ESC, 0x40))
-CUT = bytes((ESC, 0x69))
 RASTER_START = bytes((GS, 0x76, 0x30, 0x00))
 CASH_DRAWER = (bytes((ESC, 0x70, 0x00, 0x40, 0x50)),
                bytes((ESC, 0x70, 0x01, 0x40, 0x50)))
@@ -87,14 +85,13 @@ def read_pbm_header(stream):
         line = stream.readline()
         if not line:
             raise ValueError("truncated PBM header")
-        for raw_token in line.split(b"#")[0].split():
-            token = raw_token.split(b"#")[0]
-            if token:
-                fields.append(int(token))
+        content = line.split(b"#")[0]   # anything from '#' onward is comment
+        for token in content.split():
+            fields.append(int(token))
         if len(fields) >= 2:
             # width and height may share one line; the height token ends the
             # header and the very next byte starts pixel data.
-            remainder = line.split(b"#")[0].split(maxsplit=2)
+            remainder = content.split(maxsplit=2)
             if len(remainder) == 3:
                 extra = remainder[2]
                 if extra.strip():

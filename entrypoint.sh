@@ -1,7 +1,5 @@
 #!/bin/bash
-
-##echo "Setting NOFILE limit to 65536"
-##ulimit -n 65536
+set -u
 
 # Copy the custom cupsd.conf file
 if [ -f /app/cupsd.conf ]; then
@@ -32,11 +30,11 @@ if [ -z "$ADMIN_PASS" ]; then
   exit 1
 fi
 
-if ! id -u $ADMIN_USER > /dev/null 2>&1; then
+if ! id -u "$ADMIN_USER" > /dev/null 2>&1; then
   echo "Creating admin user..."
-  adduser --disabled-password --gecos "" $ADMIN_USER
+  adduser --disabled-password --gecos "" "$ADMIN_USER"
   echo "$ADMIN_USER:$ADMIN_PASS" | chpasswd
-  usermod -aG lpadmin $ADMIN_USER
+  usermod -aG lpadmin "$ADMIN_USER"
 else
   echo "Admin user already exists."
 fi
@@ -102,8 +100,4 @@ python3 -u /app/web_control_panel.py &
 # Start the MQTT handler (-u: its stdout is a pipe; unbuffered so prints
 # appear in docker logs immediately)
 echo "Starting MQTT handler..."
-python3 -u /app/printer_mqtt_handler.py
-if [ $? -ne 0 ]; then
-  echo "Failed to start MQTT handler."
-  exit 1
-fi
+python3 -u /app/printer_mqtt_handler.py || exit 1
