@@ -8,7 +8,12 @@ services:
     # never pin a /dev/bus/usb/NNN/NNN path here (renumbering broke
     # printing for ten days once).
     environment:
-      - PRINTER_URI=file:/dev/usb/lp1
+      - PRINTER_DEVICE=/dev/usb/lp1
+      - PAPER_DEVICE=/dev/usb/lp1
+      # Match the production queue options the old PPD stack ran with
+      # (FeedDist=0feed3mm, Cutting=0NoCutting): no extra feed, no cut.
+      - FEED_DIST=0
+      - CUTTING=0
       - MQTT_BROKER=your-broker-ip
       - MQTT_USERNAME=your-username
       - MQTT_PASSWORD=your-password

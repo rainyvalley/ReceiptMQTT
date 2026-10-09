@@ -62,7 +62,7 @@ The pipeline is now driverless on the CUPS side:
 
     reportlab PDF -> ghostscript pbmraw (1bpp, 203dpi, 384px wide)
                   -> app/escpos.py (port of rastertozj's emission logic)
-                  -> lp -d ReceiptPrinter on a raw queue (file:/dev/usb/lpN)
+                  -> direct write to /dev/usb/lpN (PRINTER_DEVICE)
 
 What was ported, byte-for-byte, from rastertozj.c:
 
@@ -82,10 +82,31 @@ What was ported, byte-for-byte, from rastertozj.c:
 
 The old PPD options are environment variables on the container:
 `FEED_DIST`, `BLANK_SPACE`, `CUTTING`, `CASH_DRAWER1`, `CASH_DRAWER2`
-(numeric choice indexes, same meaning as before; defaults 2/1/1/0/0).
-CUPS itself only needs `-m raw` now, which survives on CUPS 2.4 and 3.x
-alike. The `file:` backend and `FileDevice Yes` are unchanged — that leg
-never touched the filter chain.
+(numeric choice indexes, same meaning as before; code defaults 2/1/1/0/0).
+The tracked compose sets `FEED_DIST=0` and `CUTTING=0`, mirroring this
+host's production queue options (`FeedDist=0feed3mm`, `Cutting=0NoCutting`)
+so beta receipts match production receipts.
+
+### Why lp/the raw queue is NOT in the data path (2026-10, learned the
+### hard way by byte-testing both stacks)
+
+CUPS' `cups-files.conf(5)` says it outright: "File devices cannot be used
+with 'raw' print queues - a PPD file is required." Verified experimentally
+in containers: a `-m raw` queue with `file:/dev/usb/lpN` spools the bytes,
+marks the job `job-completed-successfully`, and writes **zero bytes** to
+the device - cupsd routes `application/vnd.cups-raw` through a `-` MIME
+sink and never starts the file backend. The old bookworm/PPD stack printed
+only because the PPD selected the `rastertozj` filter chain; with the PPD
+gone there is nothing to write. Even a PPD + `-o raw` (empty filter set)
+writes nothing. This is on CUPS 2.4.2 and 2.4.10 alike, and is why the
+original raw-queue work was reverted.
+
+So the handler writes the ESC/POS bytestring straight to
+`PRINTER_DEVICE` (default derived from `PAPER_DEVICE`) with `O_SYNC`:
+bytes either reach the printer or the log says exactly why not. CUPS stays
+for monitoring only (`lpstat -p` availability); its queue is never in the
+data path. `FileDevice Yes` stays in cups-files.conf so the monitoring
+queue's `file:` URI is legal.
 
 Regression gate: `scripts/smoke_test.sh` regenerates the ESC/POS stream
 with real ghostscript in CI; to re-gate against real hardware, capture a
