@@ -2,7 +2,7 @@ name: Build and publish Docker image
 
 on:
   push:
-    branches: ['main']
+    branches: ['main', 'beta']
     tags: ['v*']
   workflow_dispatch:
 
@@ -13,7 +13,7 @@ env:
 jobs:
   smoke-test:
     runs-on: ubuntu-latest
-    container: debian:bookworm-slim
+    container: debian:trixie-slim
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -22,7 +22,7 @@ jobs:
         run: |
           apt-get update
           apt-get install -y --no-install-recommends \
-            python3 python3-paho-mqtt python3-reportlab
+            python3 python3-paho-mqtt python3-reportlab ghostscript xxd
 
       - name: Run pipeline smoke test
         env:
@@ -63,6 +63,7 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=beta,enable=${{ github.ref == 'refs/heads/beta' }}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha
