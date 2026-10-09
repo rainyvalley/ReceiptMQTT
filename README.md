@@ -10,7 +10,7 @@ This is a fork of [Aesgarth/PrintMQTTify](https://github.com/Aesgarth/PrintMQTTi
 
 - Runs a CUPS server in a container and listens on an MQTT topic for print jobs.
 - Formats incoming messages for narrow thermal roll paper (58 mm / 80 mm).
-- Renders each receipt to a bitmap (ghostscript) and emits ESC/POS directly, then queues the raw bytes via CUPS — no PPDs, no CUPS filters, works identically on amd64 and arm64, and on CUPS 2.4, 2.5 or 3.x (the image builds on Debian trixie with CUPS 2.5).
+- Renders each receipt to a bitmap (ghostscript) and emits ESC/POS directly, then queues the raw bytes via CUPS — no PPDs, no CUPS filters, works identically on amd64 and arm64, and on CUPS 2.4, 2.5 or 3.x (the image builds on Debian trixie; the queue is version-agnostic).
 - Works with USB ESC/POS printers: ZJ-58/ZJ-80 and POS58-class clones, which report varied USB vendor strings (e.g. `STMicroelectronics` / `POS58 Printer USB`) but take the same ESC/POS.
 - Optional web control panel (Basic-auth protected) for status and test prints.
 
