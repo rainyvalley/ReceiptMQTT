@@ -31,10 +31,11 @@ MQTT_TOPIC = os.getenv("MQTT_TOPIC", "printer/commands")
 
 
 def check_auth(username, password):
-    # constant-time compares; the '&' forces both evaluations so username
-    # and password both get the same treatment
-    return hmac.compare_digest(username, cups_admin_user) and \
-        hmac.compare_digest(password, cups_admin_pass)
+    # constant-time compares on bytes: compare_digest raises TypeError on a
+    # str with non-ASCII characters (Basic auth is latin-1-decoded), so
+    # encode first. '&' (not `and`) so both fields are always compared.
+    return hmac.compare_digest(username.encode(), cups_admin_user.encode()) & \
+        hmac.compare_digest(password.encode(), cups_admin_pass.encode())
 
 
 def device_probe():

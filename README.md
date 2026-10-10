@@ -22,7 +22,7 @@ Typical use: printing Home Assistant shopping lists, reminders, or automation al
 
 - rastertozj's ESC/POS emission ported to Python (`app/escpos.py`), so the deprecated PPD/filter model is gone entirely.
 - Direct device writes: bytes either reach the printer or the log says why (busy devices are retried; no silent "completed" jobs).
-- Shorter receipts: page height tracks the message length, capped in raster lines (`RASTER_HEIGHT_PX`, default 480 = the old 60 mm page).
+- Shorter receipts: page height tracks the message length; tall receipts are capped at `RASTER_HEIGHT_PX` raster lines (default 480 = the old 60 mm page) and the handler logs a loud warning when the cap truncates, instead of cutting silently.
 - Paper and paper-low state published to MQTT, alongside availability.
 - Prebuilt multi-arch images published by CI; hardware-free pipeline smoke test on every push.
 
