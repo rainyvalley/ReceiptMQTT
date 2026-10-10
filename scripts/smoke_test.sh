@@ -4,7 +4,7 @@
 # 1. app/escpos.py selftest: header + tail structure of the ESC/POS stream.
 # 2. Raster banding structure with synthetic PBM input.
 # 3. Full pipeline (reportlab -> ghostscript pbmraw -> escpos): runs when
-#    reportlab is installed (CI installs it via apt inside bookworm-slim);
+#    reportlab is installed (CI installs it via apt inside trixie-slim);
 #    skipped silently on hosts that cannot install it (PEP 668).
 #
 # Optional hardware-free CUPS leg: start the container with

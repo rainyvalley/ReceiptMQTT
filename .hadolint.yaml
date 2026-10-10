@@ -1,0 +1,6 @@
+# hadolint config for the container image (see dockerfile).
+ignored:
+  # DL3008 (pin apt package versions): the image tracks Debian trixie so
+  # security updates flow in from the archive; pinning .deb versions would
+  # stop that and break the build when versions leave the pool.
+  - DL3008

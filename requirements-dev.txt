@@ -1,0 +1,9 @@
+# Test-only dependencies for the pytest suite in tests/ (CI installs these
+# in the unit-tests job); the container's runtime deps come from apt in the
+# dockerfile and must stay in sync with what the app imports (paho-mqtt,
+# flask, reportlab).
+pytest==9.1.1
+pytest-cov==7.1.0
+paho-mqtt==2.1.0
+reportlab==5.0.1
+flask==3.1.3
