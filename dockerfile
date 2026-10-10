@@ -26,27 +26,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # CUPS is loopback-only (see configs/cupsd.conf) and is monitoring-only;
 # 631 is deliberately NOT exposed, do not add it back.
 
-# Copy the pre-configured CUPS configs and entrypoint script
-COPY configs/cupsd.conf $APP_DIR/cupsd.conf
-COPY configs/cups-files.conf $APP_DIR/cups-files.conf
-COPY entrypoint.sh $APP_DIR/entrypoint.sh
-
-# Copy the templates directory
-COPY app/templates /app/templates
-
-# Ensure permissions are correct
-RUN chmod 644 $APP_DIR/cupsd.conf && \
-    chmod +x $APP_DIR/entrypoint.sh
-
-# Copy the MQTT handler script
-COPY app/printer_mqtt_handler.py $APP_DIR/printer_mqtt_handler.py
-# Copy the ESC/POS raster encoder (the Python stand-in for the retired C filter)
-COPY app/escpos.py $APP_DIR/escpos.py
-# Copy the web control panel script
-COPY app/web_control_panel.py $APP_DIR/web_control_panel.py
-# A file for the control panel's test print button (kept for continuity;
-# the button itself writes the escpos selftest directly to the device)
-RUN printf "PrintMQTTify test page\n" > /app/test_print.txt
+# Copy the pre-configured CUPS configs, entrypoint and app code in one
+# layer (BuildKit COPY --chmod: CI builds with setup-buildx-action)
+COPY --chmod=644 configs/cupsd.conf configs/cups-files.conf $APP_DIR/
+COPY --chmod=755 entrypoint.sh $APP_DIR/entrypoint.sh
+COPY app/ $APP_DIR/
 WORKDIR $APP_DIR
 
 # Use entrypoint script for runtime configuration and startup
