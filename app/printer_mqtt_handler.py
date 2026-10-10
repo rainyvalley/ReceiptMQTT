@@ -13,8 +13,10 @@ import threading
 try:
     from reportlab.pdfgen import canvas
     from reportlab.lib.pagesizes import mm
+    from reportlab.pdfbase import pdfmetrics
 except ImportError:  # pipeline unit use without reportlab installed
     canvas = None
+    pdfmetrics = None
     mm = 2.834645669  # points per mm, reportlab's conversion
 import json
 
@@ -33,8 +35,9 @@ printer_device = os.getenv("PRINTER_DEVICE", os.getenv("PAPER_DEVICE", "/dev/usb
 
 # Default receipt printer settings: ghostscript renders the reportlab PDF at
 # 203 dpi into a 384 px wide raster (48 mm roll), matching the old PPD's
-# X48MMY60MM page. PRINTER_RASTER_HEIGHT picks the page height in raster
-# lines; it only caps gs page allocation - actual receipts are cut to content.
+# X48MMY60MM page. The raster height is sized per receipt from the PDF page
+# height; RASTER_HEIGHT_PX is a hard cap - taller receipts are truncated
+# with a loud warning, not silently cut.
 RASTER_DPI_X = int(os.getenv("RASTER_DPI_X", "203"))
 RASTER_DPI_Y = int(os.getenv("RASTER_DPI_Y", "203"))
 RASTER_WIDTH_PX = int(os.getenv("RASTER_WIDTH_PX", "384"))
@@ -222,19 +225,18 @@ def generate_pdf(title, message, pdf_path):
     content_width = page_width - (2 * margin)
 
     # Split message into wrapped lines based on content width
-    # A throwaway canvas measures text; the real one is written below.
-    measure = canvas.Canvas(os.devnull, pagesize=(page_width, 58))
-    measure.setFont("Helvetica", 10)
-
     lines = []
     for part in message.split('\n'):
         words = part.split()
+        if not words:
+            lines.append("")   # keep blank lines as real vertical gaps
+            continue
         current_line = ""
 
         for word in words:
             # Check if adding the next word exceeds the width
             test_line = f"{current_line} {word}".strip()
-            text_width = measure.stringWidth(test_line)
+            text_width = pdfmetrics.stringWidth(test_line, "Helvetica", 10)
 
             if text_width <= content_width:
                 current_line = test_line
@@ -280,26 +282,44 @@ def generate_pdf(title, message, pdf_path):
 
     c.save()
     print(f"PDF saved to {pdf_path}")
+    return page_height
 
 
-def pdf_to_escpos(pdf_path, settings):
+def pdf_to_escpos(pdf_path, settings, page_height_pt=None):
     """Rasterize a PDF with ghostscript pbmraw and encode it as ESC/POS.
 
     pbmraw emits packed 1 bpp rows, black = 1 - the same bit order and
     polarity as both CUPS raster and ESC/POS GS v 0 raster data.
+
+    page_height_pt is the page height in points from generate_pdf(); the
+    -g raster height is sized from it because -dFIXEDMEDIA pins the device
+    to -g and would silently clip any receipt taller than the fixed
+    480-line (60 mm) default. Falls back to RASTER_HEIGHT_PX when unset
+    (e.g. scripts/smoke_test.sh calls this with two arguments).
     """
-    gs = subprocess.run(
-        ["gs", "-dQUIET", "-dSAFER", "-dBATCH", "-dNOPAUSE", "-dNOPROMPT",
-         "-sOutputFile=%stdout",
-         "-sDEVICE=pbmraw", f"-r{RASTER_DPI_X}x{RASTER_DPI_Y}",
-         f"-g{RASTER_WIDTH_PX}x{RASTER_HEIGHT_PX}",
-         # -dFIXEDMEDIA: without it a PDF taller than -g RESIZES the output
-         # device instead of clipping, making RASTER_HEIGHT_PX meaningless
-         # and raster memory unbounded. With it, -g is a hard crop.
-         "-dFIXEDMEDIA",
-         "-dTextAlphaBits=4", "-dGraphicsAlphaBits=1",
-         pdf_path],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+    height_px = RASTER_HEIGHT_PX
+    if page_height_pt is not None:
+        height_px = (int(page_height_pt) * RASTER_DPI_Y) // 72 + 4
+        if height_px > RASTER_HEIGHT_PX:
+            print(f"Receipt raster needs {height_px} lines; capped to "
+                  f"RASTER_HEIGHT_PX={RASTER_HEIGHT_PX}, lower text is cut")
+            height_px = RASTER_HEIGHT_PX
+    try:
+        gs = subprocess.run(
+            ["gs", "-dQUIET", "-dSAFER", "-dBATCH", "-dNOPAUSE", "-dNOPROMPT",
+             "-sOutputFile=%stdout",
+             "-sDEVICE=pbmraw", f"-r{RASTER_DPI_X}x{RASTER_DPI_Y}",
+             f"-g{RASTER_WIDTH_PX}x{height_px}",
+             # -dFIXEDMEDIA: pins the device to -g; without it gs resizes
+             # the device to the PDF page, breaking the 384 px width.
+             "-dFIXEDMEDIA",
+             "-dTextAlphaBits=4", "-dGraphicsAlphaBits=1",
+             pdf_path],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+    except subprocess.CalledProcessError as e:
+        stderr = (e.stderr or b"").decode(errors="ignore").strip()
+        raise RuntimeError(f"gs failed rc={e.returncode}: "
+                           f"{stderr[-500:] or '(no stderr)'}") from e
     out, _pages = escpos.render_all(gs.stdout, settings)
     return out
 
@@ -366,8 +386,8 @@ def print_job(title, message, printer_name):
     fd, pdf_path = tempfile.mkstemp(prefix="print_job_", suffix=".pdf")
     os.close(fd)
     try:
-        generate_pdf(title, message, pdf_path)
-        escpos_bytes = pdf_to_escpos(pdf_path, settings)
+        page_height_pt = generate_pdf(title, message, pdf_path)
+        escpos_bytes = pdf_to_escpos(pdf_path, settings, page_height_pt)
     finally:
         try:
             os.unlink(pdf_path)
@@ -408,3 +428,4 @@ if __name__ == "__main__":
         client.loop_forever()
     except Exception as e:
         print(f"Failed to start MQTT handler: {e}")
+        raise SystemExit(1)

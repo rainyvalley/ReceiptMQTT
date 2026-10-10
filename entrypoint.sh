@@ -58,8 +58,13 @@ else
   exit 1
 fi
 
-# Wait for CUPS to initialize
-sleep 2
+# Wait for CUPS to accept commands (max ~20 s). A fixed sleep is racy: on
+# a slow host the lpadmin calls below would fail silently and the queue
+# would never exist.
+for _ in $(seq 1 20); do
+  lpstat -r > /dev/null 2>&1 && break
+  sleep 1
+done
 
 # Keep a CUPS queue for monitoring (lpstat -p in the availability thread).
 # It is NOT in the data path: the handler writes ESC/POS bytes straight to

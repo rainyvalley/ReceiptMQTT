@@ -24,3 +24,7 @@ services:
         hard: 65536
     stdin_open: true
     tty: true
+    # The handler exits nonzero only on a broker connect failure at boot
+    # (mid-run outages reconnect on their own); restart so that case
+    # recovers without a manual start.
+    restart: unless-stopped

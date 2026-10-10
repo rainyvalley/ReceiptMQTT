@@ -63,8 +63,8 @@ settings = escpos.EscposSettings.from_env()
 fd, pdf_path = tempfile.mkstemp(prefix="smoke_", suffix=".pdf")
 os.close(fd)
 try:
-    h.generate_pdf("Smoke Test", "Line one\nLine two", pdf_path)
-    esc = h.pdf_to_escpos(pdf_path, settings)
+    h_page = h.generate_pdf("Smoke Test", "Line one\nLine two", pdf_path)
+    esc = h.pdf_to_escpos(pdf_path, settings, h_page)
 finally:
     os.unlink(pdf_path)
 assert esc.startswith(b"\x1b@"), "missing ESC @"
