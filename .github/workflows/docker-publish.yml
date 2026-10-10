@@ -70,6 +70,9 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
+          # no requirements.txt/pyproject in this repo; the pip cache glob
+          # must be pointed at the dev pins or setup-python fails outright
+          cache-dependency-path: requirements-dev.txt
 
       - name: Install test dependencies
         run: pip install -r requirements-dev.txt
