@@ -4,6 +4,7 @@ on:
   push:
     branches: ['main', 'beta']
     tags: ['v*']
+  pull_request:
   workflow_dispatch:
 
 env:
@@ -14,7 +15,72 @@ permissions:
   contents: read
 
 jobs:
+  lint:
+    # PR-triggerable CI: PRs previously got zero checks (no pull_request
+    # trigger). Runs on every PR and on pushes; publish jobs below stay
+    # gated to non-PR events.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4.2.2
+
+      - name: Install lint tools
+        run: |
+          pip install ruff yamllint shellcheck-py
+          curl -sfL \
+            -o /usr/local/bin/hadolint \
+            https://github.com/hadolint/hadolint/releases/download/v2.12.0/hadolint-Linux-x86_64
+          chmod +x /usr/local/bin/hadolint
+
+      - name: Ruff (app/)
+        run: ruff check --select=E9,F app/
+
+      - name: Shellcheck
+        run: shellcheck entrypoint.sh scripts/*.sh
+
+      - name: hadolint (dockerfile)
+        run: hadolint dockerfile
+
+      - name: yamllint (.github/workflows)
+        run: yamllint .github/workflows/
+
+      - name: actionlint (.github/workflows)
+        run: |
+          bash <(curl -sfL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+          ./actionlint
+
+  unit-tests:
+    # Pure pytest suite: PBM parsing, ESC/POS encoding, MQTT intake and the
+    # control panel, all offline (no sockets, no ghostscript).
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12', '3.13']
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4.2.2
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5.6.0
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install test dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Run unit tests
+        run: pytest -q --cov=app --cov-report=term
+
   smoke-test:
+    # Integration leg: the full reportlab -> ghostscript pbmraw -> escpos
+    # pipeline with the apt-installed runtime stack inside the same
+    # debian:trixie-slim base the image uses.
     runs-on: ubuntu-latest
     container: debian:trixie-slim
     permissions:
@@ -35,12 +101,52 @@ jobs:
           # in-process pipeline (reportlab -> gs -> escpos) is exercised.
           bash scripts/smoke_test.sh
 
+  container-check:
+    # Gate between the in-container integration test and the QEMU push:
+    # run the built amd64 image and prove bytes actually reach
+    # PRINTER_DEVICE. No broker is involved: the container is started with
+    # the normal entrypoint disabled and scripts/container_device_check.py
+    # drives send_raw_to_printer directly against a mounted device file.
+    # This verifies the containerised Python runtime + app code + device
+    # writing - deliberately not a full MQTT (broker) round-trip.
+    needs: [lint, unit-tests, smoke-test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4.2.2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3.11.1
+
+      - name: Build amd64 image
+        run: docker build -f dockerfile -t receiptmqtt:ci .
+
+      - name: Send raw ESC/POS through the container to a device file
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/receiptmqtt-device
+          rm -f /tmp/receiptmqtt-device/out.bin
+          docker run --rm \
+            -e PRINTER_DEVICE=/tmp/out.bin \
+            -v /tmp/receiptmqtt-device:/tmp \
+            -v "$PWD/scripts:/containerscripts:ro" \
+            --entrypoint python3 \
+            receiptmqtt:ci \
+            /containerscripts/container_device_check.py /tmp/out.bin
+          # belt and braces: the file on the host side is non-empty
+          test -s /tmp/receiptmqtt-device/out.bin
+
   build-and-push:
-    needs: smoke-test
+    needs: [container-check]
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
+    # Publish on push events only - pull_request builds never log in or
+    # push (metadata-action would otherwise mint branch tags from PRs).
+    if: github.event_name != 'pull_request'
 
     steps:
       - name: Checkout repository

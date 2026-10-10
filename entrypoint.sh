@@ -50,8 +50,7 @@ pkill cupsd || true
 
 # Start CUPS service
 echo "Starting CUPS service..."
-service cups start
-if [ $? -eq 0 ]; then
+if service cups start; then
   echo "CUPS service started successfully."
 else
   echo "Failed to start CUPS service."
