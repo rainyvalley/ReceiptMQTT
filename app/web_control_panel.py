@@ -55,7 +55,10 @@ def require_auth(f):
     @functools.wraps(f)
     def decorated(*args, **kwargs):
         auth = request.authorization
-        if auth is None or not check_auth(auth.username, auth.password):
+        # Only Basic carries a username/password pair; Bearer/Digest headers
+        # parse with None fields and must get a 401, not a 500.
+        if (auth is None or auth.type != "basic"
+                or not check_auth(auth.username or "", auth.password or "")):
             return Response(
                 "Authentication required", 401,
                 {"WWW-Authenticate": 'Basic realm="PrintMQTTify"'})
@@ -75,7 +78,8 @@ def index():
 def status():
     """Queue state AND the live device-probe result."""
     try:
-        printers = subprocess.check_output(["lpstat", "-p"], text=True)
+        printers = subprocess.check_output(["lpstat", "-p"], text=True,
+                                           timeout=10)
         printers = printers.strip().split("\n")
     except Exception:
         printers = ["lpstat failed: see container logs"]
@@ -91,6 +95,14 @@ def test_print():
     CUPS silently discards (zero bytes to the device). This runs the same
     selftest raster the app prints, byte-for-byte.
     """
+    # Browsers replay cached Basic credentials on cross-site form POSTs, so
+    # any page the admin visits could fire prints (CSRF). Fetch metadata
+    # marks those; the panel's own fetch is same-origin, and non-browser
+    # clients (curl, HA rest_command) send no Sec-Fetch-Site at all.
+    if request.headers.get("Sec-Fetch-Site", "same-origin") not in (
+            "same-origin", "none"):
+        return jsonify({"success": False,
+                        "error": "cross-site request refused"}), 403
     printer_name = request.form.get("printer_name", "ReceiptPrinter")
     if not printer_name.isalnum():
         return jsonify({"success": False, "error": "invalid printer name"})

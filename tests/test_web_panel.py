@@ -58,6 +58,12 @@ class TestRequireAuth:
         resp = client.get("/", headers=auth_pair())
         assert resp.status_code == 200
 
+    @pytest.mark.parametrize("header", ["Bearer abc",
+                                        'Digest username="admin"'])
+    def test_non_basic_scheme_gets_401_not_500(self, client, header):
+        resp = client.get("/", headers={"Authorization": header})
+        assert resp.status_code == 401
+
 
 class TestStatus:
     def test_returns_json_with_device_probe(self, client):
@@ -90,6 +96,24 @@ class TestTestPrint:
         assert data.startswith(b"\x1b@")
         assert escpos.RASTER_START in data
         assert len(data) > 100
+
+    @pytest.mark.parametrize("site", ["cross-site", "same-site"])
+    def test_cross_site_post_refused(self, client, monkeypatch, site):
+        writes = []
+        monkeypatch.setattr(w, "_write_device",
+                            lambda path, data: writes.append(data) or len(data))
+        headers = dict(auth_pair(), **{"Sec-Fetch-Site": site})
+        resp = client.post("/test-print", headers=headers,
+                           data={"printer_name": "ReceiptPrinter"})
+        assert resp.status_code == 403
+        assert writes == []
+
+    def test_same_origin_post_allowed(self, client, monkeypatch):
+        monkeypatch.setattr(w, "_write_device", lambda path, data: len(data))
+        headers = dict(auth_pair(), **{"Sec-Fetch-Site": "same-origin"})
+        resp = client.post("/test-print", headers=headers,
+                           data={"printer_name": "ReceiptPrinter"})
+        assert json.loads(resp.data)["success"] is True
 
     def test_device_error_reported_not_raised(self, client, monkeypatch):
         def busy(path, data):

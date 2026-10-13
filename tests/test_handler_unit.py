@@ -224,6 +224,18 @@ class TestPdfToEscpos:
         with pytest.raises(RuntimeError, match="gs failed rc=1"):
             h.pdf_to_escpos("/tmp/x.pdf", escpos.EscposSettings())
 
+    def test_gs_call_is_time_bounded(self, monkeypatch):
+        seen = {}
+
+        def run(cmd, *a, **k):
+            seen.update(k)
+            raise subprocess.TimeoutExpired(cmd, k.get("timeout"))
+
+        monkeypatch.setattr(h.subprocess, "run", run)
+        with pytest.raises(RuntimeError, match="gs timed out"):
+            h.pdf_to_escpos("/tmp/x.pdf", escpos.EscposSettings())
+        assert seen["timeout"] == h.GS_TIMEOUT
+
 
 # --------------------------------------------------------------- on_connect
 

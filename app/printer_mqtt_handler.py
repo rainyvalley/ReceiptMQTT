@@ -51,6 +51,12 @@ PAPER_QUERY = b"\x10\x04\x04"
 POLL_TIMEOUT = 0.25       # select wait per attempt
 POLL_ATTEMPTS = 3         # <=0.75s total hold; jobs hitting EBUSY retry
 
+# Subprocess ceilings. gs runs on the MQTT network thread and lpstat on the
+# availability thread: without a timeout a wedged child blocks either one
+# forever (keepalive lost / availability frozen at its last value).
+GS_TIMEOUT = 60
+LPSTAT_TIMEOUT = 10
+
 
 def query_paper():
     """Ask the printer whether it has paper.
@@ -107,7 +113,8 @@ def publish_availability(client, interval=60):
         while True:
             try:
                 # Check if the printer is available
-                result = subprocess.run(["lpstat", "-p", printer_name], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                result = subprocess.run(["lpstat", "-p", printer_name], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                        timeout=LPSTAT_TIMEOUT)
                 if result.returncode != 0:
                     print(f"lpstat failed rc={result.returncode}: {result.stderr.strip()}")
                     status = "offline"
@@ -315,7 +322,10 @@ def pdf_to_escpos(pdf_path, settings, page_height_pt=None):
              "-dFIXEDMEDIA",
              "-dTextAlphaBits=4", "-dGraphicsAlphaBits=1",
              pdf_path],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True,
+            timeout=GS_TIMEOUT)
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError(f"gs timed out after {GS_TIMEOUT}s") from e
     except subprocess.CalledProcessError as e:
         stderr = (e.stderr or b"").decode(errors="ignore").strip()
         raise RuntimeError(f"gs failed rc={e.returncode}: "
