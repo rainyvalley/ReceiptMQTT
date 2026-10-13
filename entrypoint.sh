@@ -103,5 +103,8 @@ python3 -u /app/web_control_panel.py &
 
 # Start the MQTT handler (-u: its stdout is a pipe; unbuffered so prints
 # appear in docker logs immediately)
+# exec: python becomes PID 1 so it receives docker's SIGTERM (bash as PID 1
+# ignores it, and the handler's graceful shutdown never ran). A failing
+# handler now simply exits non-zero, which is what the container reports.
 echo "Starting MQTT handler..."
-python3 -u /app/printer_mqtt_handler.py || exit 1
+exec python3 -u /app/printer_mqtt_handler.py

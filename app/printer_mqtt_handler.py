@@ -125,6 +125,13 @@ def query_paper():
                 pass
 
 
+# Set once shutdown begins. The availability poller checks it under
+# _AVAIL_LOCK before every publish, so it cannot re-publish "online" after
+# graceful_shutdown() has published the final "offline".
+SHUTDOWN = threading.Event()
+_AVAIL_LOCK = threading.Lock()
+
+
 def publish_availability(client, interval=60):
     """Publish printer availability periodically."""
     printer_name = os.getenv("PRINTER_NAME", "ReceiptPrinter")
@@ -155,7 +162,10 @@ def publish_availability(client, interval=60):
             if status != last_status:
                 print(f"Publishing status: {status}")
                 last_status = status
-            client.publish(availability_topic, str(status), qos=1, retain=True)
+            with _AVAIL_LOCK:
+                if SHUTDOWN.is_set():
+                    return
+                client.publish(availability_topic, str(status), qos=1, retain=True)
 
             # Paper sensor. Polled on the same cadence so only one thread
             # ever touches the device. An unanswered query leaves the last
@@ -189,6 +199,45 @@ def publish_availability(client, interval=60):
 
 
 AVAILABILITY_THREAD = None
+
+
+def graceful_shutdown(client, publish_timeout=2):
+    """Announce offline, then disconnect.
+
+    A clean DISCONNECT makes the broker discard the will, which would leave
+    the retained availability stuck at "online"; so publish "offline"
+    ourselves first (qos 1, retained) and wait briefly for the ack. The
+    paper topics are left as they are. Runs on a helper thread, never in
+    the signal handler.
+    """
+    with _AVAIL_LOCK:
+        SHUTDOWN.set()
+    try:
+        info = client.publish(availability_topic, "offline", qos=1, retain=True)
+        info.wait_for_publish(publish_timeout)
+    except Exception as e:
+        print(f"Could not publish offline before disconnect: {e}")
+    # Makes loop_forever() return (disconnect also suppresses reconnect)
+    client.disconnect()
+
+
+def install_term_handler(client):
+    """SIGTERM -> set an Event; a helper thread does the real work.
+
+    The handler runs on the main thread, which is inside loop_forever();
+    calling client.publish/disconnect from it can deadlock on paho's
+    out-packet mutex, so it only sets the Event.
+    """
+    stop = threading.Event()
+
+    def _watch():
+        stop.wait()
+        graceful_shutdown(client)
+
+    threading.Thread(target=_watch, name="shutdown", daemon=True).start()
+    signal.signal(signal.SIGTERM, lambda signum, frame: stop.set())
+    return stop
+
 
 def on_connect(client, userdata, flags, rc):
     """Callback for when the client connects to the MQTT broker."""
@@ -326,6 +375,7 @@ def shutdown_worker(timeout=SHUTDOWN_JOIN_TIMEOUT):
     return worker.stop(timeout) if worker else True
 
 
+MAX_TITLE_CHARS = 200
 MAX_MESSAGE_CHARS = 65536    # MQTT intake cap: one line ≈ 19pt of page
 
 def on_message(client, userdata, msg):
@@ -338,8 +388,10 @@ def on_message(client, userdata, msg):
     try:
         payload = json.loads(payload_text)
         printer_name = payload.get("printer_name")
-        title = payload.get("title", "Print Job")
-        message = payload.get("message", "No message provided")
+        # Coerce: JSON can carry numbers/lists/null here, which would fail
+        # later on the worker thread.
+        title = str(payload.get("title", "Print Job"))[:MAX_TITLE_CHARS]
+        message = str(payload.get("message", "No message provided"))
 
         if not printer_name:
             raise ValueError("Missing 'printer_name' in payload")
@@ -570,12 +622,9 @@ if __name__ == "__main__":
     # (README) can actually fire instead of the stale "online" standing.
     client.will_set(availability_topic, "offline", qos=1, retain=True)
 
-    def _on_term(signum, frame):
-        # Makes loop_forever() return (disconnect also suppresses reconnect)
-        # so the shutdown below runs on docker stop.
-        client.disconnect()
-
-    signal.signal(signal.SIGTERM, _on_term)
+    # docker stop -> SIGTERM -> graceful_shutdown() on a helper thread ->
+    # loop_forever() returns and the cleanup below runs.
+    install_term_handler(client)
 
     try:
         client.connect(broker, 1883, 60)

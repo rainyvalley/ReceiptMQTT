@@ -25,6 +25,9 @@ services:
       nofile:
         soft: 65536
         hard: 65536
+    # Graceful shutdown joins the print worker for up to 10s; give it room
+    # before docker SIGKILLs (default is 10s).
+    stop_grace_period: 15s
     stdin_open: true
     tty: true
     # The handler exits nonzero only on a broker connect failure at boot

@@ -7,6 +7,8 @@ ghostscript is replaced by a fake subprocess returning canned PBM raster.
 import errno
 import json
 import subprocess
+import threading
+import time
 import types
 
 import pytest
@@ -91,6 +93,29 @@ class TestOnMessage:
         h.on_message(None, None, FakeMsg(raw))
         h.flush_jobs()
         assert len(recorded_jobs) == 1
+        assert len(recorded_jobs[0][1]) == h.MAX_MESSAGE_CHARS
+
+    @pytest.mark.parametrize("title,message", [
+        (123, 4.5), (None, None), (["a", "b"], {"k": "v"}), (True, False)])
+    def test_non_string_title_and_message_coerced(self, recorded_jobs, title, message):
+        raw = json.dumps({"printer_name": "P", "title": title,
+                          "message": message}).encode()
+        h.on_message(None, None, FakeMsg(raw))
+        h.flush_jobs()
+        assert recorded_jobs == [(str(title), str(message), "P")]
+
+    def test_long_title_capped(self, recorded_jobs):
+        raw = json.dumps({"printer_name": "P", "title": "T" * 1000,
+                          "message": "m"}).encode()
+        h.on_message(None, None, FakeMsg(raw))
+        h.flush_jobs()
+        assert recorded_jobs[0][0] == "T" * h.MAX_TITLE_CHARS
+
+    def test_non_string_message_truncated_after_coercion(self, recorded_jobs):
+        raw = json.dumps({"printer_name": "P",
+                          "message": [1] * h.MAX_MESSAGE_CHARS}).encode()
+        h.on_message(None, None, FakeMsg(raw))
+        h.flush_jobs()
         assert len(recorded_jobs[0][1]) == h.MAX_MESSAGE_CHARS
 
     def test_invalid_utf8_bytes_dropped_not_replaced(self, recorded_jobs):
@@ -336,3 +361,91 @@ class TestGeneratePdf:
         heights = [h.generate_pdf("T", " ".join(["w"] * n), str(pdf))
                    for n in (1, 200, 800)]
         assert heights[0] < heights[1] < heights[2]
+
+
+# ------------------------------------------------------------------ shutdown
+
+class RecordingClient:
+    """Records the order of publish/disconnect calls and the calling thread."""
+
+    def __init__(self, publish_error=None):
+        self.events = []
+        self.threads = []
+        self.publish_error = publish_error
+
+    def publish(self, topic, payload, qos=0, retain=False):
+        self.events.append(("publish", topic, payload, qos, retain))
+        self.threads.append(threading.current_thread())
+        client = self
+
+        class Info:
+            def wait_for_publish(self, timeout=None):
+                client.events.append(("wait", timeout))
+                if client.publish_error:
+                    raise client.publish_error
+
+        return Info()
+
+    def disconnect(self):
+        self.events.append(("disconnect",))
+        self.threads.append(threading.current_thread())
+
+
+@pytest.fixture
+def shutdown_state():
+    h.SHUTDOWN.clear()
+    yield
+    h.SHUTDOWN.clear()
+
+
+class TestGracefulShutdown:
+    def test_offline_published_and_awaited_before_disconnect(self, shutdown_state):
+        c = RecordingClient()
+        h.graceful_shutdown(c)
+        assert c.events == [
+            ("publish", h.availability_topic, "offline", 1, True),
+            ("wait", 2),
+            ("disconnect",),
+        ]
+
+    def test_disconnect_still_happens_if_publish_fails(self, shutdown_state, capsys):
+        c = RecordingClient(publish_error=RuntimeError("not connected"))
+        h.graceful_shutdown(c)
+        assert c.events[-1] == ("disconnect",)
+        assert "Could not publish offline" in capsys.readouterr().out
+
+    def test_only_availability_topic_is_touched(self, shutdown_state):
+        c = RecordingClient()
+        h.graceful_shutdown(c)
+        topics = {e[1] for e in c.events if e[0] == "publish"}
+        assert topics == {h.availability_topic}
+
+    def test_poller_does_not_republish_online_after_shutdown(
+            self, shutdown_state, monkeypatch):
+        h.SHUTDOWN.set()
+        c = RecordingClient()
+        monkeypatch.setattr(h.subprocess, "run", lambda *a, **k: types.SimpleNamespace(
+            returncode=0, stdout="printer P is idle", stderr=""))
+        monkeypatch.setattr(h, "query_paper", lambda: None)
+        t = h.publish_availability(c, interval=0.01)
+        t.join(2)
+        assert not t.is_alive()
+        assert c.events == []
+
+    def test_signal_handler_only_sets_event_work_runs_on_helper_thread(
+            self, shutdown_state, monkeypatch):
+        installed = {}
+        monkeypatch.setattr(h.signal, "signal",
+                            lambda sig, fn: installed.setdefault(sig, fn))
+        c = RecordingClient()
+        stop = h.install_term_handler(c)
+        handler = installed[h.signal.SIGTERM]
+
+        handler(h.signal.SIGTERM, None)           # as the main thread would
+        deadline = time.time() + 5
+        while ("disconnect",) not in c.events and time.time() < deadline:
+            time.sleep(0.01)
+        assert stop.is_set()
+        assert c.events[0][0] == "publish"
+        assert c.events[-1] == ("disconnect",)
+        assert threading.current_thread() not in c.threads

@@ -16,6 +16,14 @@ class Msg:
                                    "message": f"m{n}"}).encode()
 
 
+@pytest.fixture(autouse=True)
+def reset_global_worker():
+    """No test leaks the module-global worker (queue, dropped counter)."""
+    h.shutdown_worker()
+    yield
+    h.shutdown_worker()
+
+
 @pytest.fixture
 def worker():
     w = h.PrintWorker(maxsize=3)
