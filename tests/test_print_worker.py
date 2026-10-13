@@ -141,6 +141,7 @@ def test_on_message_does_not_block_while_printing(monkeypatch):
         assert h.get_worker().dropped >= 1
     finally:
         release.set()
+        h.flush_jobs()   # queued jobs must finish while print_job is patched
 
 
 @pytest.mark.parametrize("raw,expected", [
