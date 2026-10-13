@@ -97,6 +97,24 @@ class TestTestPrint:
         assert escpos.RASTER_START in data
         assert len(data) > 100
 
+    @pytest.mark.parametrize("site", ["cross-site", "same-site"])
+    def test_cross_site_post_refused(self, client, monkeypatch, site):
+        writes = []
+        monkeypatch.setattr(w, "_write_device",
+                            lambda path, data: writes.append(data) or len(data))
+        headers = dict(auth_pair(), **{"Sec-Fetch-Site": site})
+        resp = client.post("/test-print", headers=headers,
+                           data={"printer_name": "ReceiptPrinter"})
+        assert resp.status_code == 403
+        assert writes == []
+
+    def test_same_origin_post_allowed(self, client, monkeypatch):
+        monkeypatch.setattr(w, "_write_device", lambda path, data: len(data))
+        headers = dict(auth_pair(), **{"Sec-Fetch-Site": "same-origin"})
+        resp = client.post("/test-print", headers=headers,
+                           data={"printer_name": "ReceiptPrinter"})
+        assert json.loads(resp.data)["success"] is True
+
     def test_device_error_reported_not_raised(self, client, monkeypatch):
         def busy(path, data):
             raise OSError(16, "Device or resource busy")

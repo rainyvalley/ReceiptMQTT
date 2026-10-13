@@ -94,6 +94,14 @@ def test_print():
     CUPS silently discards (zero bytes to the device). This runs the same
     selftest raster the app prints, byte-for-byte.
     """
+    # Browsers replay cached Basic credentials on cross-site form POSTs, so
+    # any page the admin visits could fire prints (CSRF). Fetch metadata
+    # marks those; the panel's own fetch is same-origin, and non-browser
+    # clients (curl, HA rest_command) send no Sec-Fetch-Site at all.
+    if request.headers.get("Sec-Fetch-Site", "same-origin") not in (
+            "same-origin", "none"):
+        return jsonify({"success": False,
+                        "error": "cross-site request refused"}), 403
     printer_name = request.form.get("printer_name", "ReceiptPrinter")
     if not printer_name.isalnum():
         return jsonify({"success": False, "error": "invalid printer name"})
