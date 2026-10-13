@@ -78,7 +78,8 @@ def index():
 def status():
     """Queue state AND the live device-probe result."""
     try:
-        printers = subprocess.check_output(["lpstat", "-p"], text=True)
+        printers = subprocess.check_output(["lpstat", "-p"], text=True,
+                                           timeout=10)
         printers = printers.strip().split("\n")
     except Exception:
         printers = ["lpstat failed: see container logs"]
