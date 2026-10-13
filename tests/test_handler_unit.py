@@ -31,6 +31,14 @@ class FakeClient:
         self.subscriptions.append((args, kwargs))
 
 
+@pytest.fixture(autouse=True)
+def fresh_worker():
+    """Each test gets its own print worker (and none leaks out)."""
+    h.shutdown_worker()
+    yield
+    h.shutdown_worker()
+
+
 @pytest.fixture
 def recorded_jobs(monkeypatch):
     calls = []
@@ -49,33 +57,39 @@ class TestOnMessage:
         raw = json.dumps({"printer_name": "ReceiptPrinter",
                           "title": "Alert", "message": "hello"}).encode()
         h.on_message(None, None, FakeMsg(raw))
+        h.flush_jobs()
         assert recorded_jobs == [("Alert", "hello", "ReceiptPrinter")]
 
     def test_defaults_for_missing_title_and_message(self, recorded_jobs):
         raw = json.dumps({"printer_name": "P"}).encode()
         h.on_message(None, None, FakeMsg(raw))
+        h.flush_jobs()
         assert recorded_jobs == [("Print Job", "No message provided", "P")]
 
     def test_bad_json_never_reaches_print_job(self, recorded_jobs, capsys):
         h.on_message(None, None, FakeMsg(b"{not json"))
+        h.flush_jobs()
         assert recorded_jobs == []
         assert "Error decoding JSON" in capsys.readouterr().out
 
     def test_missing_printer_name_rejected(self, recorded_jobs, capsys):
         raw = json.dumps({"title": "T", "message": "m"}).encode()
         h.on_message(None, None, FakeMsg(raw))
+        h.flush_jobs()
         assert recorded_jobs == []
         assert "Missing 'printer_name'" in capsys.readouterr().out
 
     def test_empty_printer_name_rejected(self, recorded_jobs):
         raw = json.dumps({"printer_name": ""}).encode()
         h.on_message(None, None, FakeMsg(raw))
+        h.flush_jobs()
         assert recorded_jobs == []
 
     def test_oversized_message_truncated(self, recorded_jobs):
         raw = json.dumps({"printer_name": "P",
                           "message": "x" * (h.MAX_MESSAGE_CHARS + 5000)}).encode()
         h.on_message(None, None, FakeMsg(raw))
+        h.flush_jobs()
         assert len(recorded_jobs) == 1
         assert len(recorded_jobs[0][1]) == h.MAX_MESSAGE_CHARS
 
@@ -85,6 +99,7 @@ class TestOnMessage:
         # reportlab cannot encode and would silently kill the receipt)
         raw = b'{"printer_name": "P", "message": "ok \xff done"}'
         h.on_message(None, None, FakeMsg(raw))
+        h.flush_jobs()
         assert len(recorded_jobs) == 1
         message = recorded_jobs[0][1]
         assert "�" not in message
@@ -98,6 +113,7 @@ class TestOnMessage:
         monkeypatch.setattr(h, "print_job", boom)
         raw = json.dumps({"printer_name": "P"}).encode()
         h.on_message(None, None, FakeMsg(raw))   # must not raise
+        h.flush_jobs()
 
 
 # ----------------------------------------------------------- send_raw_to_printer

@@ -75,6 +75,7 @@ MQTT_USERNAME=your-username
 MQTT_PASSWORD=your-password
 ADMIN_PASS=your-panel-password    # Basic-auth password for the control panel
 PRINTER_DEVICE=/dev/usb/lp0       # your printer's device path (default /dev/usb/lp1)
+# PRINT_QUEUE_SIZE=16             # optional: max jobs waiting behind the one printing (default 16)
 # IMAGE_TAG=beta                  # or `local` for a locally built image
 ```
 
@@ -125,6 +126,8 @@ mosquitto_pub -h <broker> -u <user> -P <pass> -t printer/commands \
 ```
 
 Check logs with `docker logs printmqttify_container` if nothing prints.
+
+**Job queue.** Messages are printed one at a time, in arrival order, by a single background worker, so a slow render or print never stalls the MQTT connection. Up to `PRINT_QUEUE_SIZE` jobs (default `16`, integer >= 1; invalid values fall back to the default) can wait behind the one printing. If the queue is full, the *newest* message is dropped and a `WARNING: print queue full ... dropped newest message` line with a running drop count is logged. On `docker stop` (SIGTERM) the job in flight gets up to 10 s to finish; jobs still waiting are discarded and logged. With `docker run`, pass `-e PRINT_QUEUE_SIZE=32` to change it.
 
 ---
 
