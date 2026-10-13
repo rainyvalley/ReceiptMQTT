@@ -58,6 +58,12 @@ class TestRequireAuth:
         resp = client.get("/", headers=auth_pair())
         assert resp.status_code == 200
 
+    @pytest.mark.parametrize("header", ["Bearer abc",
+                                        'Digest username="admin"'])
+    def test_non_basic_scheme_gets_401_not_500(self, client, header):
+        resp = client.get("/", headers={"Authorization": header})
+        assert resp.status_code == 401
+
 
 class TestStatus:
     def test_returns_json_with_device_probe(self, client):

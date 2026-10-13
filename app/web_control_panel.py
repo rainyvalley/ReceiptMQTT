@@ -55,7 +55,10 @@ def require_auth(f):
     @functools.wraps(f)
     def decorated(*args, **kwargs):
         auth = request.authorization
-        if auth is None or not check_auth(auth.username, auth.password):
+        # Only Basic carries a username/password pair; Bearer/Digest headers
+        # parse with None fields and must get a 401, not a 500.
+        if (auth is None or auth.type != "basic"
+                or not check_auth(auth.username or "", auth.password or "")):
             return Response(
                 "Authentication required", 401,
                 {"WWW-Authenticate": 'Basic realm="PrintMQTTify"'})
