@@ -75,6 +75,11 @@ MQTT_USERNAME=your-username
 MQTT_PASSWORD=your-password
 ADMIN_PASS=your-panel-password    # Basic-auth password for the control panel
 PRINTER_DEVICE=/dev/usb/lp0       # your printer's device path (default /dev/usb/lp1)
+# MQTT_PORT=1883                  # optional: broker port (8883 is typical for TLS)
+# MQTT_TLS=1                      # optional: TLS to the broker (default off)
+# MQTT_TLS_CA=/certs/ca.pem       # optional: CA bundle inside the container (default: system CAs)
+# MQTT_TLS_INSECURE=1             # optional: skip hostname check (lab only, default off)
+# WEB_PUBLISH_BIND=127.0.0.1      # optional: publish the panel on localhost only (default 0.0.0.0)
 # PRINT_QUEUE_SIZE=16             # optional: max jobs waiting behind the one printing (default 16)
 # IMAGE_TAG=beta                  # or `local` for a locally built image
 ```
@@ -127,7 +132,22 @@ mosquitto_pub -h <broker> -u <user> -P <pass> -t printer/commands \
 
 Check logs with `docker logs printmqttify_container` if nothing prints.
 
-**Job queue.** Messages are printed one at a time, in arrival order, by a single background worker, so a slow render or print never stalls the MQTT connection. Up to `PRINT_QUEUE_SIZE` jobs (default `16`, integer >= 1; invalid values fall back to the default) can wait behind the one printing. If the queue is full, the *newest* message is dropped and a `WARNING: print queue full ... dropped newest message` line with a running drop count is logged. On `docker stop` (SIGTERM) the job in flight gets up to 10 s to finish; jobs still waiting are discarded and logged. With `docker run`, pass `-e PRINT_QUEUE_SIZE=32` to change it.
+**Job queue.** Messages are printed one at a time, in arrival order, by a single background worker, so a slow render or print never stalls the MQTT connection. Up to `PRINT_QUEUE_SIZE` jobs (default `16`, integer >= 1; invalid values fall back to the default) can wait behind the one printing. If the queue is full, the *newest* message is dropped and a `WARNING: print queue full ... dropped newest message` line with a running drop count is logged and the drop is published to MQTT (see [Dropped and failed jobs](#dropped-and-failed-jobs)). Jobs that raise while printing are likewise logged and published. On `docker stop` (SIGTERM) the job in flight gets up to 10 s to finish; jobs still waiting are discarded and logged. With `docker run`, pass `-e PRINT_QUEUE_SIZE=32` to change it.
+
+### Settings
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `MQTT_PORT` | `1883` | Broker port (invalid or out-of-range values fall back to 1883). |
+| `MQTT_TLS` | off | `1`/`true`/`yes`/`on` enables TLS to the broker using the system CA store. |
+| `MQTT_TLS_CA` | unset | Path (inside the container) to a CA bundle to trust instead of the system CAs. Mount it read-only. |
+| `MQTT_TLS_INSECURE` | off | Skip broker hostname verification. Lab use only; logs a warning. |
+| `WEB_BIND` | `0.0.0.0` | Address the control panel binds to inside the container. Leave it alone under Docker bridge networking; see below. |
+| `WEB_PUBLISH_BIND` | `0.0.0.0` | Compose only: host address the panel port is published on (`127.0.0.1` = this machine only). |
+
+### Securing the deployment
+
+All of the above are opt-in; with nothing set, behaviour is unchanged (plain MQTT on 1883, panel on every interface). To harden it: point the app at a TLS listener (`MQTT_PORT=8883`, `MQTT_TLS=1`, plus `MQTT_TLS_CA` for a private CA), keep the panel local-only by setting `WEB_PUBLISH_BIND=127.0.0.1` in `.env` (the same as editing the mapping to `127.0.0.1:8080:8080`, or `-p 127.0.0.1:8080:8080` with `docker run`; reach it through an SSH tunnel or reverse proxy), and use strong, unique values for `MQTT_PASSWORD` and `ADMIN_PASS`. `WEB_BIND` only matters when running the app outside Docker's bridge networking (host networking or bare metal); inside a bridge-networked container it must stay `0.0.0.0` or the published port cannot reach it.
 
 ---
 
@@ -162,6 +182,38 @@ mqtt:
 ```
 
 Both carry `device_class: problem`, so "on" means something needs attention. The `availability_topic` means they show as unavailable rather than stale when the container is down.
+
+### Dropped and failed jobs
+
+Jobs the printer never printed are published, not just logged. Topics (all QoS 1, retained):
+
+| Topic | Payload |
+|---|---|
+| `printer/last_error` | JSON: `timestamp` (UTC ISO 8601), `kind` (`dropped` = queue full, `failed` = the job raised), `message`, `dropped_total`, `failed_total`. |
+| `printer/dropped_total` | Integer, jobs dropped since the container started. |
+| `printer/failed_total` | Integer, jobs that failed since the container started. |
+
+`last_error` is retained so Home Assistant still shows the most recent problem after a restart; it is only replaced by the next error. The counters are published as `0` on every connect, so they reset when the container restarts. `message` contains at most the first 40 characters of the job title and, for failures, a short error string; the message body is never published. Topic names can be changed with `MQTT_LAST_ERROR_TOPIC`, `MQTT_DROPPED_TOTAL_TOPIC` and `MQTT_FAILED_TOTAL_TOPIC`. Publishing is fire-and-forget: a broker problem is logged and never blocks printing.
+
+```yaml
+mqtt:
+  sensor:
+    - name: "Receipt Printer Last Error"
+      unique_id: receipt_printer_last_error
+      state_topic: "printer/last_error"
+      value_template: "{{ value_json.kind }}"
+      json_attributes_topic: "printer/last_error"
+    - name: "Receipt Printer Dropped Jobs"
+      unique_id: receipt_printer_dropped_total
+      state_topic: "printer/dropped_total"
+      state_class: total_increasing
+    - name: "Receipt Printer Failed Jobs"
+      unique_id: receipt_printer_failed_total
+      state_topic: "printer/failed_total"
+      state_class: total_increasing
+```
+
+Merge these under your existing `mqtt:` key (do not repeat it); the project publishes no MQTT discovery, so sensors are defined by hand like the paper ones. An automation triggering on a rise in `sensor.receipt_printer_failed_jobs` or `..._dropped_jobs` can notify you.
 
 ### Printing a message
 

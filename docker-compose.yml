@@ -3,7 +3,9 @@ services:
     image: ghcr.io/rainyvalley/receiptmqtt:${IMAGE_TAG:-latest}
     container_name: printmqttify_container
     ports:
-      - "8080:8080"
+      # Host address the panel is published on. Default (all interfaces) is
+      # unchanged; set WEB_PUBLISH_BIND=127.0.0.1 in .env for local-only.
+      - "${WEB_PUBLISH_BIND:-0.0.0.0}:8080:8080"
     # USB device mapping lives in docker-compose.override.yml per host;
     # never pin a /dev/bus/usb/NNN/NNN path here (renumbering broke
     # printing for ten days once).
@@ -12,11 +14,16 @@ services:
       # Match the production queue options the old PPD stack ran with
       # (FeedDist=0feed3mm, Cutting=0NoCutting): no extra feed, no cut.
       # Print jobs queue behind the one printing; when this many are waiting,
-      # newer messages are dropped with a logged warning.
+      # newer messages are dropped, logged and published to printer/last_error.
       - PRINT_QUEUE_SIZE=${PRINT_QUEUE_SIZE:-16}
       - FEED_DIST=0
       - CUTTING=0
       - MQTT_BROKER=${MQTT_BROKER:-your-broker-ip}
+      # Opt-in connection settings; defaults keep plain MQTT on 1883.
+      - MQTT_PORT=${MQTT_PORT:-1883}
+      - MQTT_TLS=${MQTT_TLS:-}
+      - MQTT_TLS_CA=${MQTT_TLS_CA:-}
+      - MQTT_TLS_INSECURE=${MQTT_TLS_INSECURE:-}
       - MQTT_USERNAME=${MQTT_USERNAME:-your-username}
       - MQTT_PASSWORD=${MQTT_PASSWORD:? .env must set MQTT_PASSWORD}
       - ADMIN_USER=${ADMIN_USER:-admin}

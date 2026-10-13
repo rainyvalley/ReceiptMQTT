@@ -21,6 +21,7 @@ except ImportError:  # pipeline unit use without reportlab installed
 import json
 import queue
 import signal
+from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import escpos
@@ -31,6 +32,9 @@ username = os.getenv("MQTT_USERNAME")
 password = os.getenv("MQTT_PASSWORD")
 topic = os.getenv("MQTT_TOPIC", "printer/commands")
 availability_topic = "printer/availability"
+last_error_topic = os.getenv("MQTT_LAST_ERROR_TOPIC", "printer/last_error")
+dropped_total_topic = os.getenv("MQTT_DROPPED_TOTAL_TOPIC", "printer/dropped_total")
+failed_total_topic = os.getenv("MQTT_FAILED_TOTAL_TOPIC", "printer/failed_total")
 paper_topic = os.getenv("MQTT_PAPER_TOPIC", "printer/paper")
 paper_low_topic = os.getenv("MQTT_PAPER_LOW_TOPIC", "printer/paper_low")
 printer_device = os.getenv("PRINTER_DEVICE", os.getenv("PAPER_DEVICE", "/dev/usb/lp1"))
@@ -76,10 +80,103 @@ def _env_int(name, default, minimum=1):
     return value
 
 
+def _env_bool(name, default=False, env=None):
+    """Boolean env var: 1/true/yes/on and 0/false/no/off; unset/empty/junk -> default."""
+    raw = (os.environ if env is None else env).get(name)
+    if raw is None or not raw.strip():
+        return default
+    value = raw.strip().lower()
+    if value in ("1", "true", "yes", "on"):
+        return True
+    if value in ("0", "false", "no", "off"):
+        return False
+    print(f"Ignoring invalid {name}={raw!r}; using {default}")
+    return default
+
+
+# Broker connection. Defaults are the historical behaviour: plain TCP 1883.
+def _broker_port():
+    port = _env_int("MQTT_PORT", 1883)
+    if port > 65535:
+        print(f"Ignoring MQTT_PORT={port} (maximum 65535); using 1883")
+        return 1883
+    return port
+
+
+broker_port = _broker_port()
+
+
+def configure_tls(client, env=None):
+    """Enable TLS on the client when MQTT_TLS is on; returns True if enabled.
+
+    System CAs are used unless MQTT_TLS_CA names a CA bundle file.
+    MQTT_TLS_INSECURE=1 skips hostname verification (certificates are still
+    required to chain to the CA) - for lab brokers only. All opt-in.
+    """
+    env = os.environ if env is None else env
+    if not _env_bool("MQTT_TLS", False, env):
+        return False
+    ca = (env.get("MQTT_TLS_CA") or "").strip()
+    if ca:
+        client.tls_set(ca_certs=ca)
+    else:
+        client.tls_set()
+    if _env_bool("MQTT_TLS_INSECURE", False, env):
+        client.tls_insecure_set(True)
+        print("WARNING: MQTT_TLS_INSECURE is on; broker hostname is NOT verified")
+    return True
+
+
 # Jobs waiting behind the one being printed. When full, the NEWEST message
 # is dropped (and counted) so the MQTT network thread never blocks.
 PRINT_QUEUE_SIZE = _env_int("PRINT_QUEUE_SIZE", 16)
 SHUTDOWN_JOIN_TIMEOUT = 10   # seconds to wait for the worker on exit
+
+
+ERROR_TITLE_CAP = 40      # chars of job title echoed in a last_error message
+ERROR_DETAIL_CAP = 120    # chars of exception text echoed
+
+_CLIENT = None            # set by __main__ once the paho client exists
+
+
+def _safe_publish(topic_, payload, retain=True, qos=1):
+    """Fire-and-forget publish: paho queues it, we never wait. Any error is
+    logged and swallowed - observability must not take down a worker."""
+    client = _CLIENT
+    if client is None:
+        return
+    try:
+        client.publish(topic_, payload, qos=qos, retain=retain)
+    except Exception as e:
+        print(f"Could not publish to {topic_}: {e}")
+
+
+def publish_counters(dropped, failed):
+    """Retained running totals (since process start) for HA sensors."""
+    _safe_publish(dropped_total_topic, str(dropped))
+    _safe_publish(failed_total_topic, str(failed))
+
+
+def report_event(kind, label, detail, dropped, failed):
+    """Publish a dropped/failed job to MQTT (retained last_error + counters).
+
+    Payload never carries the message body; only the title, cut to
+    ERROR_TITLE_CAP chars, and (for failures) a capped exception string.
+    """
+    try:
+        title = (label or "")[:ERROR_TITLE_CAP]
+        text = f"queue full, job {title!r} dropped" if kind == "dropped" \
+            else f"job {title!r} failed: {(detail or '')[:ERROR_DETAIL_CAP]}"
+        _safe_publish(last_error_topic, json.dumps({
+            "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "kind": kind,
+            "message": text,
+            "dropped_total": dropped,
+            "failed_total": failed,
+        }))
+        publish_counters(dropped, failed)
+    except Exception as e:   # never propagate into the worker/network thread
+        print(f"Could not report {kind} job: {e}")
 
 
 def query_paper():
@@ -249,6 +346,9 @@ def on_connect(client, userdata, flags, rc):
         # that arrive while the container is disconnected. Clean session
         # still loses genuine broker-offline messages - that is inherent.
         client.subscribe(topic, qos=1)
+        # Make the retained counters exist (0) so HA sensors resolve at once.
+        worker = get_worker()
+        publish_counters(worker.dropped, worker.failed)
         # Start publishing availability - ONCE. paho calls on_connect again
         # on every auto-reconnect; spawning the thread here would accumulate
         # duplicate 60s pollers per outage (and multiply device openers).
@@ -273,12 +373,24 @@ class PrintWorker:
 
     _STOP = object()   # sentinel: wakes a blocked worker on shutdown
 
-    def __init__(self, maxsize):
+    def __init__(self, maxsize, reporter=None):
+        self._reporter = reporter   # (kind, label, detail, dropped, failed)
         self._queue = queue.Queue(maxsize=maxsize)
         self._stop = threading.Event()
         self._thread = None
         self._lock = threading.Lock()
         self.dropped = 0
+        self.failed = 0
+
+    def _report(self, kind, label, detail):
+        if self._reporter is None:
+            return
+        try:
+            with self._lock:
+                dropped, failed = self.dropped, self.failed
+            self._reporter(kind, label, detail, dropped, failed)
+        except Exception as e:
+            print(f"Error reporting {kind} job: {e}")
 
     def start(self):
         with self._lock:
@@ -288,8 +400,10 @@ class PrintWorker:
                     target=self._run, name="print-worker", daemon=True)
                 self._thread.start()
 
-    def submit(self, job):
+    def submit(self, job, label=""):
         """Queue job (a zero-arg callable); False if dropped because full.
+
+        label (the job title) is only used in drop/failure reports.
 
         Never blocks. Starts the worker on first use.
         """
@@ -303,6 +417,7 @@ class PrintWorker:
                 total = self.dropped
             print(f"WARNING: print queue full ({self._queue.maxsize} waiting); "
                   f"dropped newest message ({total} dropped since start)")
+            self._report("dropped", label, "")
             return False
 
     def _run(self):
@@ -315,6 +430,10 @@ class PrintWorker:
                     job()
                 except Exception as e:   # one bad job must not kill the worker
                     print(f"Error printing job: {e}")
+                    with self._lock:
+                        self.failed += 1
+                    self._report("failed", getattr(job, "label", ""),
+                                 f"{type(e).__name__}: {e}")
             finally:
                 self._queue.task_done()
 
@@ -360,7 +479,7 @@ def get_worker():
     global _WORKER
     with _WORKER_LOCK:
         if _WORKER is None:
-            _WORKER = PrintWorker(PRINT_QUEUE_SIZE)
+            _WORKER = PrintWorker(PRINT_QUEUE_SIZE, reporter=report_event)
         return _WORKER
 
 
@@ -406,7 +525,9 @@ def on_message(client, userdata, msg):
         # EBUSY retries while the paper poll holds the device). Runs on the
         # print worker thread, not paho's network thread; print_job is
         # looked up at run time.
-        get_worker().submit(lambda: print_job(title, message, printer_name))
+        job = lambda: print_job(title, message, printer_name)  # noqa: E731
+        job.label = title   # only echoed (capped) in drop/failure reports
+        get_worker().submit(job, label=title)
 
     except json.JSONDecodeError as e:
         print(f"Error decoding JSON: {e}")
@@ -614,6 +735,8 @@ if __name__ == "__main__":
 
     if username and password:
         client.username_pw_set(username, password)
+    configure_tls(client)
+    _CLIENT = client
 
     client.on_connect = on_connect
     client.on_message = on_message
@@ -627,7 +750,7 @@ if __name__ == "__main__":
     install_term_handler(client)
 
     try:
-        client.connect(broker, 1883, 60)
+        client.connect(broker, broker_port, 60)
         client.loop_forever()
     except Exception as e:
         print(f"Failed to start MQTT handler: {e}")

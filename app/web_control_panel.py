@@ -117,5 +117,11 @@ def test_print():
         return jsonify({"success": False, "error": f"{printer_device}: {e}"})
 
 
+def web_bind(env=None):
+    """Address the panel binds to: WEB_BIND, default 0.0.0.0 (unchanged)."""
+    env = os.environ if env is None else env
+    return (env.get("WEB_BIND") or "").strip() or "0.0.0.0"
+
+
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8080)
+    app.run(host=web_bind(), port=8080)
