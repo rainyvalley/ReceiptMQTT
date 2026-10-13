@@ -95,6 +95,29 @@ class TestOnMessage:
         assert len(recorded_jobs) == 1
         assert len(recorded_jobs[0][1]) == h.MAX_MESSAGE_CHARS
 
+    @pytest.mark.parametrize("title,message", [
+        (123, 4.5), (None, None), (["a", "b"], {"k": "v"}), (True, False)])
+    def test_non_string_title_and_message_coerced(self, recorded_jobs, title, message):
+        raw = json.dumps({"printer_name": "P", "title": title,
+                          "message": message}).encode()
+        h.on_message(None, None, FakeMsg(raw))
+        h.flush_jobs()
+        assert recorded_jobs == [(str(title), str(message), "P")]
+
+    def test_long_title_capped(self, recorded_jobs):
+        raw = json.dumps({"printer_name": "P", "title": "T" * 1000,
+                          "message": "m"}).encode()
+        h.on_message(None, None, FakeMsg(raw))
+        h.flush_jobs()
+        assert recorded_jobs[0][0] == "T" * h.MAX_TITLE_CHARS
+
+    def test_non_string_message_truncated_after_coercion(self, recorded_jobs):
+        raw = json.dumps({"printer_name": "P",
+                          "message": [1] * h.MAX_MESSAGE_CHARS}).encode()
+        h.on_message(None, None, FakeMsg(raw))
+        h.flush_jobs()
+        assert len(recorded_jobs[0][1]) == h.MAX_MESSAGE_CHARS
+
     def test_invalid_utf8_bytes_dropped_not_replaced(self, recorded_jobs):
         # one raw 0xFF byte inside the JSON string; decode(errors="ignore")
         # must drop it, not turn it into U+FFFD (which the WinAnsi fonts in

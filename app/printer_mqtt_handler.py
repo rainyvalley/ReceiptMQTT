@@ -375,6 +375,7 @@ def shutdown_worker(timeout=SHUTDOWN_JOIN_TIMEOUT):
     return worker.stop(timeout) if worker else True
 
 
+MAX_TITLE_CHARS = 200
 MAX_MESSAGE_CHARS = 65536    # MQTT intake cap: one line ≈ 19pt of page
 
 def on_message(client, userdata, msg):
@@ -387,8 +388,10 @@ def on_message(client, userdata, msg):
     try:
         payload = json.loads(payload_text)
         printer_name = payload.get("printer_name")
-        title = payload.get("title", "Print Job")
-        message = payload.get("message", "No message provided")
+        # Coerce: JSON can carry numbers/lists/null here, which would fail
+        # later on the worker thread.
+        title = str(payload.get("title", "Print Job"))[:MAX_TITLE_CHARS]
+        message = str(payload.get("message", "No message provided"))
 
         if not printer_name:
             raise ValueError("Missing 'printer_name' in payload")
