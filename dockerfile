@@ -10,8 +10,9 @@ ENV APP_DIR=/app
 # environment as externally managed (PEP 668) and bare `pip3 install` fails.
 #
 # No CUPS printer driver is installed: printing is PDF -> ghostscript
-# pbmraw -> app/escpos.py -> lp on a raw CUPS queue, so ghostscript replaces
-# the compiled filter and the image is identical on amd64 and arm64.
+# pbmraw -> app/escpos.py -> direct write to PRINTER_DEVICE (CUPS is kept
+# for lpstat monitoring only), so ghostscript replaces the compiled filter
+# and the image is identical on amd64 and arm64.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cups \
     cups-client \

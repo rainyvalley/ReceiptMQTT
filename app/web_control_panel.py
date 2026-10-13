@@ -2,8 +2,8 @@
 
 Endpoints:
   /            status + test-print page (Basic auth, see below)
-  /status      lpstat -p output as JSON
-  /test-print  queue the bundled test page against a printer
+  /status      lpstat -p output plus a device-open probe, as JSON
+  /test-print  write the escpos selftest raster straight to PRINTER_DEVICE
 
 CUPS itself is loopback-only now that printing is a raw queue, so this panel
 is the only network-facing surface besides MQTT. It is protected with HTTP
