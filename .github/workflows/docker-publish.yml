@@ -29,10 +29,20 @@ jobs:
       - name: Install lint tools
         run: |
           pip install ruff yamllint shellcheck-py
+          # Release binaries are pinned by version AND sha256 (from each
+          # release's published checksums) so a swapped asset fails the job.
           curl -sfL \
             -o /usr/local/bin/hadolint \
             https://github.com/hadolint/hadolint/releases/download/v2.12.0/hadolint-Linux-x86_64
+          echo "56de6d5e5ec427e17b74fa48d51271c7fc0d61244bf5c90e828aab8362d55010  /usr/local/bin/hadolint" \
+            | sha256sum -c -
           chmod +x /usr/local/bin/hadolint
+          curl -sfL -o actionlint.tar.gz \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  actionlint.tar.gz" \
+            | sha256sum -c -
+          tar -xzf actionlint.tar.gz -C /usr/local/bin actionlint
+          rm actionlint.tar.gz
 
       - name: Ruff (app/)
         run: ruff check --select=E9,F app/
@@ -47,9 +57,7 @@ jobs:
         run: yamllint .github/workflows/
 
       - name: actionlint (.github/workflows)
-        run: |
-          bash <(curl -sfL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
-          ./actionlint
+        run: actionlint
 
   unit-tests:
     # Pure pytest suite: PBM parsing, ESC/POS encoding, MQTT intake and the
