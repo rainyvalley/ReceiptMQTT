@@ -327,9 +327,8 @@ def pdf_to_escpos(pdf_path, settings, page_height_pt=None):
 def _write_device(path, data):
     """Write data to a character device or regular file, all of it.
 
-    O_SYNC so bytes hit the printer before we report success; EBUSY is
-    translated to a clean failure message (CUPS holding the device is no
-    longer possible - the queue no longer opens it - but keep the guard).
+    O_SYNC so bytes hit the printer before we report success. Errors,
+    EBUSY included, propagate as OSError; send_raw_to_printer retries EBUSY.
     """
     fd = os.open(path, os.O_WRONLY | os.O_SYNC)
     try:
