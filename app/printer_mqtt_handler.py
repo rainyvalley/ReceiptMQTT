@@ -19,6 +19,8 @@ except ImportError:  # pipeline unit use without reportlab installed
     pdfmetrics = None
     mm = 2.834645669  # points per mm, reportlab's conversion
 import json
+import queue
+import signal
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import escpos
@@ -51,11 +53,33 @@ PAPER_QUERY = b"\x10\x04\x04"
 POLL_TIMEOUT = 0.25       # select wait per attempt
 POLL_ATTEMPTS = 3         # <=0.75s total hold; jobs hitting EBUSY retry
 
-# Subprocess ceilings. gs runs on the MQTT network thread and lpstat on the
+# Subprocess ceilings. gs runs on the print worker thread and lpstat on the
 # availability thread: without a timeout a wedged child blocks either one
 # forever (keepalive lost / availability frozen at its last value).
 GS_TIMEOUT = 60
 LPSTAT_TIMEOUT = 10
+
+
+def _env_int(name, default, minimum=1):
+    """Integer env var; unset, junk or below-minimum values fall back to the default."""
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        print(f"Ignoring invalid {name}={raw!r}; using {default}")
+        return default
+    if value < minimum:
+        print(f"Ignoring {name}={value} (minimum {minimum}); using {default}")
+        return default
+    return value
+
+
+# Jobs waiting behind the one being printed. When full, the NEWEST message
+# is dropped (and counted) so the MQTT network thread never blocks.
+PRINT_QUEUE_SIZE = _env_int("PRINT_QUEUE_SIZE", 16)
+SHUTDOWN_JOIN_TIMEOUT = 10   # seconds to wait for the worker on exit
 
 
 def query_paper():
@@ -190,6 +214,118 @@ def on_connect(client, userdata, flags, rc):
 
 
 
+class PrintWorker:
+    """Runs print jobs one at a time, in arrival order, off the network thread.
+
+    paho runs on_message on its network thread; gs and the device write
+    can take many seconds there and would stall keepalives and every other
+    message. Callbacks only enqueue; this single daemon thread does the work.
+    """
+
+    _STOP = object()   # sentinel: wakes a blocked worker on shutdown
+
+    def __init__(self, maxsize):
+        self._queue = queue.Queue(maxsize=maxsize)
+        self._stop = threading.Event()
+        self._thread = None
+        self._lock = threading.Lock()
+        self.dropped = 0
+
+    def start(self):
+        with self._lock:
+            if self._thread is None or not self._thread.is_alive():
+                self._stop.clear()
+                self._thread = threading.Thread(
+                    target=self._run, name="print-worker", daemon=True)
+                self._thread.start()
+
+    def submit(self, job):
+        """Queue job (a zero-arg callable); False if dropped because full.
+
+        Never blocks. Starts the worker on first use.
+        """
+        self.start()
+        try:
+            self._queue.put_nowait(job)
+            return True
+        except queue.Full:
+            with self._lock:
+                self.dropped += 1
+                total = self.dropped
+            print(f"WARNING: print queue full ({self._queue.maxsize} waiting); "
+                  f"dropped newest message ({total} dropped since start)")
+            return False
+
+    def _run(self):
+        while not self._stop.is_set():
+            job = self._queue.get()
+            try:
+                if job is self._STOP or self._stop.is_set():
+                    return
+                try:
+                    job()
+                except Exception as e:   # one bad job must not kill the worker
+                    print(f"Error printing job: {e}")
+            finally:
+                self._queue.task_done()
+
+    def flush(self):
+        """Block until every queued job has finished (tests/diagnostics)."""
+        self._queue.join()
+
+    def stop(self, timeout=SHUTDOWN_JOIN_TIMEOUT):
+        """Stop after the job in flight; queued jobs are discarded.
+
+        Returns True if the thread exited within timeout.
+        """
+        self._stop.set()
+        thread = self._thread
+        if thread is None:
+            return True
+        discarded = 0
+        try:   # make room for the sentinel by discarding waiting jobs
+            while True:
+                self._queue.get_nowait()
+                self._queue.task_done()
+                discarded += 1
+        except queue.Empty:
+            pass
+        if discarded:
+            print(f"Shutdown: discarded {discarded} queued print job(s)")
+        try:
+            self._queue.put_nowait(self._STOP)
+        except queue.Full:
+            pass
+        thread.join(timeout)
+        if thread.is_alive():
+            print(f"Print worker still busy after {timeout}s; exiting anyway")
+            return False
+        return True
+
+
+_WORKER = None
+_WORKER_LOCK = threading.Lock()
+
+
+def get_worker():
+    global _WORKER
+    with _WORKER_LOCK:
+        if _WORKER is None:
+            _WORKER = PrintWorker(PRINT_QUEUE_SIZE)
+        return _WORKER
+
+
+def flush_jobs():
+    get_worker().flush()
+
+
+def shutdown_worker(timeout=SHUTDOWN_JOIN_TIMEOUT):
+    global _WORKER
+    with _WORKER_LOCK:
+        worker, _WORKER = _WORKER, None
+    return worker.stop(timeout) if worker else True
+
+
 MAX_MESSAGE_CHARS = 65536    # MQTT intake cap: one line ≈ 19pt of page
 
 def on_message(client, userdata, msg):
@@ -215,8 +351,10 @@ def on_message(client, userdata, msg):
             print(f"Message truncated to {MAX_MESSAGE_CHARS} chars")
 
         # PDF -> pbmraw raster -> ESC/POS -> printer device (direct write;
-        # EBUSY retries while the paper poll holds the device)
-        print_job(title, message, printer_name)
+        # EBUSY retries while the paper poll holds the device). Runs on the
+        # print worker thread, not paho's network thread; print_job is
+        # looked up at run time.
+        get_worker().submit(lambda: print_job(title, message, printer_name))
 
     except json.JSONDecodeError as e:
         print(f"Error decoding JSON: {e}")
@@ -432,9 +570,18 @@ if __name__ == "__main__":
     # (README) can actually fire instead of the stale "online" standing.
     client.will_set(availability_topic, "offline", qos=1, retain=True)
 
+    def _on_term(signum, frame):
+        # Makes loop_forever() return (disconnect also suppresses reconnect)
+        # so the shutdown below runs on docker stop.
+        client.disconnect()
+
+    signal.signal(signal.SIGTERM, _on_term)
+
     try:
         client.connect(broker, 1883, 60)
         client.loop_forever()
     except Exception as e:
         print(f"Failed to start MQTT handler: {e}")
         raise SystemExit(1)
+    finally:
+        shutdown_worker()

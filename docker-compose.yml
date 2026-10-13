@@ -11,6 +11,9 @@ services:
       - PRINTER_DEVICE=${PRINTER_DEVICE:-/dev/usb/lp1}
       # Match the production queue options the old PPD stack ran with
       # (FeedDist=0feed3mm, Cutting=0NoCutting): no extra feed, no cut.
+      # Print jobs queue behind the one printing; when this many are waiting,
+      # newer messages are dropped with a logged warning.
+      - PRINT_QUEUE_SIZE=${PRINT_QUEUE_SIZE:-16}
       - FEED_DIST=0
       - CUTTING=0
       - MQTT_BROKER=${MQTT_BROKER:-your-broker-ip}
