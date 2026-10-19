@@ -59,10 +59,11 @@ fi
 
 # Wait for CUPS to accept commands (max ~20 s). A fixed sleep is racy: on
 # a slow host the lpadmin calls below would fail silently and the queue
-# would never exist.
-for _ in $(seq 1 20); do
+# would never exist. Poll at 0.2 s so a fast start is not padded to a
+# whole second.
+for _ in $(seq 1 100); do
   lpstat -r > /dev/null 2>&1 && break
-  sleep 1
+  sleep 0.2
 done
 
 # Keep a CUPS queue for monitoring (lpstat -p in the availability thread).
