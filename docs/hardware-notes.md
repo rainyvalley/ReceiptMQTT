@@ -10,7 +10,8 @@ Things that live outside this repo but that the container depends on.
   not mark paper. Its firmware self-test prints, so the head works; the data
   path does not.
 - `0416:5011` — STMicroelectronics POS58, serial `Printer`. **This is the one
-  that prints.** It is what `PRINTER_URI` points at.
+  that prints.** It is what `PRINTER_DEVICE` should point at (`/dev/usb/lp0`
+  or `/dev/usb/lp1`, whichever the checks below report for it).
 
 The kernel assigns `/dev/usb/lp0` and `/dev/usb/lp1` in enumeration order, and
 the two printers **swap between them** across reboots and `modprobe` cycles.
@@ -38,7 +39,7 @@ Writing to the kernel character device works, so the queue uses
 
 ## docker-compose
 
-Credentials live in `docker-compose.override.yml` (git-ignored). The service
+Credentials belong in `.env` (git-ignored), not in the compose file. The service
 needs USB device access, not full privilege:
 
 ```yaml

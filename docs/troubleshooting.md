@@ -2,9 +2,9 @@
 
 ## Port mapping
 
-The control panel is published on 8080. CUPS needs no published port: it is
-loopback-only inside the container and only receives print-ready bytes from
-the app in-process.
+The control panel is published on 8080. The app writes ESC/POS bytes straight
+to `PRINTER_DEVICE`, so no print path uses CUPS; CUPS stays loopback-only
+(`127.0.0.1:631`) and is never published — it exists for `lpstat` monitoring.
 
 ## Control panel
 

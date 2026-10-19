@@ -84,7 +84,7 @@ PRINTER_DEVICE=/dev/usb/lp0       # your printer's device path (default /dev/usb
 # IMAGE_TAG=beta                  # or `local` for a locally built image
 ```
 
-`docker-compose.override.yml` maps the printer into the container. The path must match `PRINTER_DEVICE`:
+Map the printer into the container via `.env`/compose (the override file is local and git-ignored). The device path must match `PRINTER_DEVICE`:
 
 ```yaml
 services:
