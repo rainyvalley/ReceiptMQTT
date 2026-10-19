@@ -17,7 +17,7 @@ import os
 import subprocess
 
 import escpos
-from printer_mqtt_handler import _write_device, printer_device
+from printer_mqtt_handler import write_device_retrying, printer_device
 from flask import Flask, render_template, request, jsonify, Response
 
 app = Flask(__name__)
@@ -103,14 +103,11 @@ def test_print():
             "same-origin", "none"):
         return jsonify({"success": False,
                         "error": "cross-site request refused"}), 403
-    printer_name = request.form.get("printer_name", "ReceiptPrinter")
-    if not printer_name.isalnum():
-        return jsonify({"success": False, "error": "invalid printer name"})
     try:
         settings = escpos.EscposSettings.from_env()
         pbm = escpos.selftest_pbm()
         escpos_bytes, _pages = escpos.render_all(pbm, settings)
-        n = _write_device(printer_device, escpos_bytes)
+        n = write_device_retrying(printer_device, escpos_bytes)
         return jsonify({"success": True,
                         "output": f"wrote {n} bytes to {printer_device}"})
     except OSError as e:

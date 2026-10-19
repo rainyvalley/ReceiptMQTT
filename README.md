@@ -74,13 +74,19 @@ MQTT_BROKER=192.0.2.10          # your broker IP
 MQTT_USERNAME=your-username
 MQTT_PASSWORD=your-password
 ADMIN_PASS=your-panel-password    # Basic-auth password for the control panel
-PRINTER_DEVICE=/dev/usb/lp0       # your printer's device path (default /dev/usb/lp1)
+PRINTER_DEVICE=/dev/usb/lp0       # your printer's device path (default /dev/usb/lp1; the legacy name `PAPER_DEVICE` is still read as a fallback when `PRINTER_DEVICE` is unset)
 # MQTT_PORT=1883                  # optional: broker port (8883 is typical for TLS)
 # MQTT_TLS=1                      # optional: TLS to the broker (default off)
 # MQTT_TLS_CA=/certs/ca.pem       # optional: CA bundle inside the container (default: system CAs)
 # MQTT_TLS_INSECURE=1             # optional: skip hostname check (lab only, default off)
 # WEB_PUBLISH_BIND=127.0.0.1      # optional: publish the panel on localhost only (default 0.0.0.0)
 # PRINT_QUEUE_SIZE=16             # optional: max jobs waiting behind the one printing (default 16)
+# PRINTER_NAME=ReceiptPrinter     # optional: CUPS queue name used for the lpstat availability check (default ReceiptPrinter)
+# MQTT_PAPER_TOPIC=printer/paper  # optional: paper-present topic (default printer/paper)
+# MQTT_PAPER_LOW_TOPIC=printer/paper_low  # optional: paper-low topic (default printer/paper_low)
+# RASTER_DPI_X=203                # optional: ghostscript horizontal dpi (default 203)
+# RASTER_DPI_Y=203                # optional: ghostscript vertical dpi (default 203)
+# RASTER_WIDTH_PX=384             # optional: raster width in pixels (default 384 = 48 mm at 203 dpi)
 # IMAGE_TAG=beta                  # or `local` for a locally built image
 ```
 
@@ -193,7 +199,7 @@ Jobs the printer never printed are published, not just logged. Topics (all QoS 1
 | `printer/dropped_total` | Integer, jobs dropped since the container started. |
 | `printer/failed_total` | Integer, jobs that failed since the container started. |
 
-`last_error` is retained so Home Assistant still shows the most recent problem after a restart; it is only replaced by the next error. The counters are published as `0` on every connect, so they reset when the container restarts. `message` contains at most the first 40 characters of the job title and, for failures, a short error string; the message body is never published. Topic names can be changed with `MQTT_LAST_ERROR_TOPIC`, `MQTT_DROPPED_TOTAL_TOPIC` and `MQTT_FAILED_TOTAL_TOPIC`. Publishing is fire-and-forget: a broker problem is logged and never blocks printing.
+`last_error` is retained so Home Assistant still shows the most recent problem after a restart; it is only replaced by the next error. The counters are published as `0` on every connect, so they reset when the container restarts. `message` contains at most the first 40 characters of the job title and, for failures, a short error string; the message body is never published. Topic names can be changed with `MQTT_LAST_ERROR_TOPIC`, `MQTT_DROPPED_TOTAL_TOPIC` and `MQTT_FAILED_TOTAL_TOPIC`; the paper topics likewise via `MQTT_PAPER_TOPIC` and `MQTT_PAPER_LOW_TOPIC`. Publishing is fire-and-forget: a broker problem is logged and never blocks printing.
 
 ```yaml
 mqtt:

@@ -32,6 +32,9 @@ class FakeClient:
     def subscribe(self, *args, **kwargs):
         self.subscriptions.append((args, kwargs))
 
+    def publish(self, *args, **kwargs):
+        pass
+
 
 @pytest.fixture(autouse=True)
 def fresh_worker():
@@ -329,6 +332,74 @@ class TestOnConnect:
         assert client.subscriptions == []
 
 
+class TestOnConnectAvailability:
+    def test_publishes_online_immediately(self, monkeypatch):
+        published = []
+        client = FakeClient()
+        client.publish = lambda *a, **k: published.append((a, k))
+        monkeypatch.setattr(h, "AVAILABILITY_THREAD",
+                            types.SimpleNamespace(is_alive=lambda: True))
+        monkeypatch.setattr(h, "LAST_AVAILABILITY", "online")
+        h.on_connect(client, None, None, 0)
+        assert (("printer/availability", "online"),
+                {"qos": 1, "retain": True}) in published
+
+    def test_no_publish_after_shutdown(self, monkeypatch):
+        published = []
+        client = FakeClient()
+        client.publish = lambda *a, **k: published.append(a)
+        monkeypatch.setattr(h, "AVAILABILITY_THREAD",
+                            types.SimpleNamespace(is_alive=lambda: True))
+        h.SHUTDOWN.set()
+        try:
+            h.on_connect(client, None, None, 0)
+        finally:
+            h.SHUTDOWN.clear()
+        assert not any(a[0] == "printer/availability" for a in published)
+
+
+class TestConnectWithRetry:
+    def test_retries_with_doubling_backoff_until_connected(self):
+        attempts, waits = [], []
+
+        class C:
+            def connect(self, host, port, keepalive):
+                attempts.append((host, port, keepalive))
+                if len(attempts) < 4:
+                    raise ConnectionRefusedError("down")
+
+        assert h.connect_with_retry(C(), "b", 1883, 60,
+                                    stop=threading.Event(),
+                                    sleep=waits.append) is True
+        assert len(attempts) == 4
+        assert waits == [1.0, 2.0, 4.0]
+
+    def test_backoff_is_capped(self):
+        waits = []
+
+        class C:
+            n = 0
+
+            def connect(self, *a):
+                C.n += 1
+                if C.n < 10:
+                    raise OSError("down")
+
+        h.connect_with_retry(C(), "b", 1, stop=threading.Event(),
+                             sleep=waits.append)
+        assert max(waits) == h.CONNECT_BACKOFF_MAX
+
+    def test_shutdown_stops_retrying(self):
+        stop = threading.Event()
+
+        class C:
+            def connect(self, *a):
+                raise OSError("down")
+
+        assert h.connect_with_retry(C(), "b", 1, stop=stop,
+                                    sleep=lambda d: stop.set()) is False
+
+
 # ---------------------------------------------------- DLE-EOT paper query
 # query_paper is device-bound (os.open + select on PRINTER_DEVICE), so it is
 # pinned at the wire level only: the request must be DLE EOT 4.
@@ -366,6 +437,18 @@ class TestGeneratePdf:
         height_solid = h.generate_pdf("T", solid, str(pdf_a))
         height_gapped = h.generate_pdf("T", gapped, str(pdf_b))
         assert height_gapped == pytest.approx(height_solid)
+
+    def test_overlong_word_is_hard_broken_to_content_width(self, tmp_path):
+        content_width = (48 - 2 * self.MARGIN) * h.mm
+        word = "W" * 60
+        chunks = h.break_word(word, content_width)
+        assert "".join(chunks) == word and len(chunks) > 1
+        assert all(h.pdfmetrics.stringWidth(c, "Helvetica", 10)
+                   <= content_width for c in chunks)
+        # and generate_pdf allots one line per chunk
+        height = h.generate_pdf("T", word, str(tmp_path / "w.pdf"))
+        expect = self.MARGIN * h.mm + (len(chunks) + 2) * self.LINE_HEIGHT
+        assert height == pytest.approx(max(expect, 48 * h.mm + 1))
 
     def test_long_paragraph_wraps_into_more_lines(self, tmp_path):
         pdf = tmp_path / "wrap.pdf"

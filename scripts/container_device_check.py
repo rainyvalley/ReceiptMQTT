@@ -17,7 +17,7 @@ import os
 import sys
 
 sys.path.insert(0, "/app")
-from printer_mqtt_handler import send_raw_to_printer  # noqa: E402
+from printer_mqtt_handler import send_raw_to_printer
 
 # A framed one-band job: ESC @ reset, GS v 0 0 (xDim=2, yDim=1) + one band
 # byte, then ESC @ reset. 0x1d 0x76 0x30 is the DLE-V style raster header

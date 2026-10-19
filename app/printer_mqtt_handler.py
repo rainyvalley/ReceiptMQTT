@@ -227,6 +227,8 @@ def query_paper():
 # graceful_shutdown() has published the final "offline".
 SHUTDOWN = threading.Event()
 _AVAIL_LOCK = threading.Lock()
+# Last availability the poller decided on; re-announced on every (re)connect.
+LAST_AVAILABILITY = "online"
 
 
 def publish_availability(client, interval=60):
@@ -234,6 +236,7 @@ def publish_availability(client, interval=60):
     printer_name = os.getenv("PRINTER_NAME", "ReceiptPrinter")
 
     def publish_status():
+        global LAST_AVAILABILITY
         last_status = None
         last_paper = None
         last_low = None
@@ -256,6 +259,7 @@ def publish_availability(client, interval=60):
                 status = "offline"
 
             # Only log and publish on change; the topic is retained
+            LAST_AVAILABILITY = status
             if status != last_status:
                 print(f"Publishing status: {status}")
                 last_status = status
@@ -318,6 +322,31 @@ def graceful_shutdown(client, publish_timeout=2):
     client.disconnect()
 
 
+CONNECT_BACKOFF_START = 1.0
+CONNECT_BACKOFF_MAX = 30.0
+
+
+def connect_with_retry(client, host, port, keepalive=60, stop=None, sleep=None):
+    """client.connect() until it works, with doubling backoff (capped).
+
+    Returns True once connected, False if shutdown was requested first.
+    The wait is on the SHUTDOWN event so SIGTERM interrupts it at once.
+    """
+    stop = SHUTDOWN if stop is None else stop
+    wait = stop.wait if sleep is None else sleep
+    delay = CONNECT_BACKOFF_START
+    while not stop.is_set():
+        try:
+            client.connect(host, port, keepalive)
+            return True
+        except Exception as e:
+            print(f"Cannot reach MQTT broker {host}:{port}: {e}; "
+                  f"retrying in {delay:g}s")
+            wait(delay)
+            delay = min(delay * 2, CONNECT_BACKOFF_MAX)
+    return False
+
+
 def install_term_handler(client):
     """SIGTERM -> set an Event; a helper thread does the real work.
 
@@ -346,6 +375,12 @@ def on_connect(client, userdata, flags, rc):
         # that arrive while the container is disconnected. Clean session
         # still loses genuine broker-offline messages - that is inherent.
         client.subscribe(topic, qos=1)
+        # Overwrite a retained "offline" (our will, or the broker's after a
+        # drop) now rather than at the next 60s poll.
+        with _AVAIL_LOCK:
+            if not SHUTDOWN.is_set():
+                client.publish(availability_topic, LAST_AVAILABILITY,
+                               qos=1, retain=True)
         # Make the retained counters exist (0) so HA sensors resolve at once.
         worker = get_worker()
         publish_counters(worker.dropped, worker.failed)
@@ -530,7 +565,7 @@ def on_message(client, userdata, msg):
         # EBUSY retries while the paper poll holds the device). Runs on the
         # print worker thread, not paho's network thread; print_job is
         # looked up at run time.
-        job = lambda: print_job(title, message, printer_name)  # noqa: E731
+        job = lambda: print_job(title, message, printer_name)
         job.label = title   # only echoed (capped) in drop/failure reports
         get_worker().submit(job, label=title)
 
@@ -538,6 +573,25 @@ def on_message(client, userdata, msg):
         print(f"Error decoding JSON: {e}")
     except Exception as e:
         print(f"Error handling message: {e}")
+
+
+def break_word(word, max_width, font="Helvetica", size=10):
+    """Split one unbreakable word into chunks that each fit max_width.
+
+    Always makes progress (at least one character per chunk) so a glyph
+    wider than the line cannot loop forever.
+    """
+    chunks = []
+    chunk = ""
+    for ch in word:
+        if chunk and pdfmetrics.stringWidth(chunk + ch, font, size) > max_width:
+            chunks.append(chunk)
+            chunk = ch
+        else:
+            chunk += ch
+    if chunk:
+        chunks.append(chunk)
+    return chunks
 
 
 def generate_pdf(title, message, pdf_path):
@@ -557,6 +611,15 @@ def generate_pdf(title, message, pdf_path):
         current_line = ""
 
         for word in words:
+            # A word wider than the whole line would overflow the right
+            # margin: hard-break it into line-sized chunks.
+            if pdfmetrics.stringWidth(word, "Helvetica", 10) > content_width:
+                if current_line:
+                    lines.append(current_line)
+                pieces = break_word(word, content_width)
+                lines.extend(pieces[:-1])
+                current_line = pieces[-1]
+                continue
             # Check if adding the next word exceeds the width
             test_line = f"{current_line} {word}".strip()
             text_width = pdfmetrics.stringWidth(test_line, "Helvetica", 10)
@@ -674,6 +737,22 @@ DEVICE_BUSY_RETRIES = 8      # EBUSY: paper poll or another job holds usblp
 DEVICE_BUSY_BACKOFF = 0.25   # seconds between retries (2s worst case)
 
 
+def write_device_retrying(path, data):
+    """_write_device with EBUSY retried (see send_raw_to_printer); returns bytes written."""
+    last_err = None
+    for attempt in range(DEVICE_BUSY_RETRIES):
+        try:
+            return _write_device(path, data)
+        except OSError as e:
+            if e.errno != errno.EBUSY:
+                raise
+            last_err = e
+            print(f"Device busy (attempt {attempt + 1}/{DEVICE_BUSY_RETRIES}); "
+                  "retrying shortly")
+            time.sleep(DEVICE_BUSY_BACKOFF)
+    raise last_err
+
+
 def send_raw_to_printer(printer_name, escpos_bytes):
     """Deliver a pre-rendered ESC/POS bytestring to the printer.
 
@@ -691,21 +770,8 @@ def send_raw_to_printer(printer_name, escpos_bytes):
     """
     if not printer_device:
         raise RuntimeError("PRINTER_DEVICE is not set; no printer to write to")
-    last_err = None
-    for attempt in range(DEVICE_BUSY_RETRIES):
-        try:
-            n = _write_device(printer_device, escpos_bytes)
-            print(f"Wrote {n} ESC/POS bytes to {printer_device}.")
-            return
-        except OSError as e:
-            if e.errno == errno.EBUSY:
-                last_err = e
-                print(f"Device busy (attempt {attempt + 1}/{DEVICE_BUSY_RETRIES}); "
-                      "retrying shortly")
-                time.sleep(DEVICE_BUSY_BACKOFF)
-                continue
-            raise
-    raise last_err
+    n = write_device_retrying(printer_device, escpos_bytes)
+    print(f"Wrote {n} ESC/POS bytes to {printer_device}.")
 
 
 def print_job(title, message, printer_name):
@@ -759,8 +825,8 @@ if __name__ == "__main__":
     install_term_handler(client)
 
     try:
-        client.connect(broker, broker_port, 60)
-        client.loop_forever()
+        if connect_with_retry(client, broker, broker_port, 60):
+            client.loop_forever()
     except Exception as e:
         print(f"Failed to start MQTT handler: {e}")
         raise SystemExit(1)

@@ -16,6 +16,13 @@ services:
       # Print jobs queue behind the one printing; when this many are waiting,
       # newer messages are dropped, logged and published to printer/last_error.
       - PRINT_QUEUE_SIZE=${PRINT_QUEUE_SIZE:-16}
+      # Optional overrides (code defaults shown; see README "Optional settings").
+      - PRINTER_NAME=${PRINTER_NAME:-ReceiptPrinter}
+      - MQTT_PAPER_TOPIC=${MQTT_PAPER_TOPIC:-printer/paper}
+      - MQTT_PAPER_LOW_TOPIC=${MQTT_PAPER_LOW_TOPIC:-printer/paper_low}
+      - RASTER_DPI_X=${RASTER_DPI_X:-203}
+      - RASTER_DPI_Y=${RASTER_DPI_Y:-203}
+      - RASTER_WIDTH_PX=${RASTER_WIDTH_PX:-384}
       - FEED_DIST=0
       - CUTTING=0
       - MQTT_BROKER=${MQTT_BROKER:-your-broker-ip}
@@ -37,7 +44,6 @@ services:
     stop_grace_period: 15s
     stdin_open: true
     tty: true
-    # The handler exits nonzero only on a broker connect failure at boot
-    # (mid-run outages reconnect on their own); restart so that case
-    # recovers without a manual start.
+    # An unreachable broker at boot is retried with backoff and mid-run
+    # outages reconnect on their own; restart covers any other crash.
     restart: unless-stopped

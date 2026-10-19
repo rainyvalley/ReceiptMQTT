@@ -9,6 +9,7 @@ import json
 import pytest
 
 import escpos
+import printer_mqtt_handler as h
 import web_control_panel as w
 
 
@@ -74,17 +75,31 @@ class TestStatus:
 
 
 class TestTestPrint:
-    def test_invalid_printer_name_rejected(self, client):
+    def test_printer_name_field_is_ignored(self, client, monkeypatch):
+        monkeypatch.setattr(h, "_write_device", lambda path, data: len(data))
         resp = client.post("/test-print", headers=auth_pair(),
                            data={"printer_name": "Bad Name!"})
-        body = json.loads(resp.data)
-        assert resp.status_code == 200
-        assert body["success"] is False
-        assert body["error"] == "invalid printer name"
+        assert json.loads(resp.data)["success"] is True
+
+    def test_busy_device_is_retried(self, client, monkeypatch):
+        import errno
+        calls = []
+
+        def flaky(path, data):
+            calls.append(1)
+            if len(calls) < 3:
+                raise OSError(errno.EBUSY, "Device busy")
+            return len(data)
+
+        monkeypatch.setattr(h, "_write_device", flaky)
+        monkeypatch.setattr(h.time, "sleep", lambda s: None)
+        resp = client.post("/test-print", headers=auth_pair())
+        assert json.loads(resp.data)["success"] is True
+        assert len(calls) == 3
 
     def test_valid_name_sends_escpos_to_device(self, client, monkeypatch):
         writes = []
-        monkeypatch.setattr(w, "_write_device",
+        monkeypatch.setattr(h, "_write_device",
                             lambda path, data: writes.append((path, data)) or len(data))
         resp = client.post("/test-print", headers=auth_pair(),
                            data={"printer_name": "ReceiptPrinter"})
@@ -100,7 +115,7 @@ class TestTestPrint:
     @pytest.mark.parametrize("site", ["cross-site", "same-site"])
     def test_cross_site_post_refused(self, client, monkeypatch, site):
         writes = []
-        monkeypatch.setattr(w, "_write_device",
+        monkeypatch.setattr(h, "_write_device",
                             lambda path, data: writes.append(data) or len(data))
         headers = dict(auth_pair(), **{"Sec-Fetch-Site": site})
         resp = client.post("/test-print", headers=headers,
@@ -109,7 +124,7 @@ class TestTestPrint:
         assert writes == []
 
     def test_same_origin_post_allowed(self, client, monkeypatch):
-        monkeypatch.setattr(w, "_write_device", lambda path, data: len(data))
+        monkeypatch.setattr(h, "_write_device", lambda path, data: len(data))
         headers = dict(auth_pair(), **{"Sec-Fetch-Site": "same-origin"})
         resp = client.post("/test-print", headers=headers,
                            data={"printer_name": "ReceiptPrinter"})
@@ -119,7 +134,7 @@ class TestTestPrint:
         def busy(path, data):
             raise OSError(16, "Device or resource busy")
 
-        monkeypatch.setattr(w, "_write_device", busy)
+        monkeypatch.setattr(h, "_write_device", busy)
         resp = client.post("/test-print", headers=auth_pair(),
                            data={"printer_name": "ReceiptPrinter"})
         body = json.loads(resp.data)
