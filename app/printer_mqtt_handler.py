@@ -502,6 +502,11 @@ def on_message(client, userdata, msg):
     # errors="ignore": replace would turn one bad byte into U+FFFD, which
     # reportlab's WinAnsi fonts cannot encode - the whole receipt would be
     # silently dropped. Dropping bad bytes keeps the rest printable.
+    # A retained command would reprint on every reconnect/restart; commands
+    # are events, so ignore broker-replayed retained ones.
+    if getattr(msg, "retain", False) is True:
+        print(f"Ignoring retained message on topic {msg.topic}")
+        return
     payload_text = msg.payload.decode(errors="ignore")
     print(f"Received message on topic {msg.topic}")
     try:
@@ -560,7 +565,8 @@ def generate_pdf(title, message, pdf_path):
                 current_line = test_line
             else:
                 # Line is too long, add the current line to lines and start a new one
-                lines.append(current_line)
+                if current_line:   # first word too wide: no phantom blank line
+                    lines.append(current_line)
                 current_line = word
 
         # Append the final line if it exists
@@ -655,7 +661,10 @@ def _write_device(path, data):
     try:
         written = 0
         while written < len(data):
-            written += os.write(fd, data[written:])
+            n = os.write(fd, data[written:])
+            if n <= 0:
+                raise OSError(errno.EIO, "device accepted 0 bytes")
+            written += n
         return written
     finally:
         os.close(fd)

@@ -62,6 +62,24 @@ class TestOnMessage:
         h.flush_jobs()
         assert recorded_jobs == [("Alert", "hello", "ReceiptPrinter")]
 
+    def test_retained_message_not_printed(self, recorded_jobs):
+        raw = json.dumps({"printer_name": "P", "message": "old"}).encode()
+        msg = FakeMsg(raw)
+        msg.retain = True
+        h.on_message(None, None, msg)
+        h.flush_jobs()
+        assert recorded_jobs == []
+
+    def test_overlong_first_word_adds_no_blank_line(self, tmp_path):
+        seen = []
+        orig = h.canvas.Canvas.drawString
+        h.canvas.Canvas.drawString = lambda self, x, y, t, *a, **k: seen.append(t)
+        try:
+            h.generate_pdf("T", "W" * 80 + " tail", str(tmp_path / "a.pdf"))
+        finally:
+            h.canvas.Canvas.drawString = orig
+        assert "" not in seen
+
     def test_defaults_for_missing_title_and_message(self, recorded_jobs):
         raw = json.dumps({"printer_name": "P"}).encode()
         h.on_message(None, None, FakeMsg(raw))
