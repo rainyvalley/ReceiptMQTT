@@ -450,4 +450,4 @@ Parts of this fork — code, configuration, and documentation — were written w
 
 ## License
 
-The PrintMQTTify portion follows the upstream project's Creative Commons Zero v1.0 (CC0-1.0) dedication. The Python port of the ZJ-58/ZJ-80 ESC/POS output logic ([`app/escpos.py`](./app/escpos.py)) remains BSD-2-Clause, © Aleksey N. Vinogradov (klirichek), under the terms in [`LICENSE.zj-58`](./LICENSE.zj-58).
+This project is BSD 2-Clause, © rosco@rosco.cloud; see [`LICENSE`](./LICENSE). The PrintMQTTify code it grew from is Creative Commons Zero v1.0 (CC0-1.0) and stays so upstream. The Python port of the ZJ-58/ZJ-80 ESC/POS output logic ([`app/escpos.py`](./app/escpos.py)) remains BSD-2-Clause, © Aleksey N. Vinogradov (klirichek), under the terms in [`LICENSE.zj-58`](./LICENSE.zj-58).
