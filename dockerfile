@@ -21,8 +21,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-paho-mqtt \
     python3-flask \
+    python3-gunicorn \
     python3-reportlab \
     && rm -rf /var/lib/apt/lists/*
+
+# Unprivileged account the app (MQTT handler and web panel) runs as. cupsd and
+# D-Bus still start as root inside the entrypoint; it then drops to this user.
+# The "lp" group lets it write /dev/usb/lpN; the entrypoint adds the device's
+# own group id at start, since that number comes from the host.
+RUN useradd --system --no-create-home --shell /usr/sbin/nologin \
+    --uid 10001 --groups lp receipt
 
 # CUPS is loopback-only (see configs/cupsd.conf) and is monitoring-only;
 # 631 is deliberately NOT exposed, do not add it back.
@@ -32,6 +40,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --chmod=644 configs/cupsd.conf configs/cups-files.conf $APP_DIR/
 COPY --chmod=755 entrypoint.sh $APP_DIR/entrypoint.sh
 COPY app/ $APP_DIR/
+# The chmod on the config COPY above leaves the directory itself 644; the
+# unprivileged app user must be able to enter and read it.
+RUN chmod 755 $APP_DIR
 WORKDIR $APP_DIR
 
 # Use entrypoint script for runtime configuration and startup

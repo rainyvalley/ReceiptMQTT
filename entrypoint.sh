@@ -98,14 +98,35 @@ cupsenable "$PRINTER_NAME"
 echo "Tailing CUPS logs..."
 tail -F /var/log/cups/error_log &
 
-# Start the Flask web control panel
-echo "Starting Flask web control panel..."
-python3 -u /app/web_control_panel.py &
+# Run the app as the unprivileged "receipt" user. It needs write access to
+# the printer device: take the device's own group id (it is the host's, so it
+# may differ from this image's "lp"). If the device still is not writable,
+# say so and fall back to root so an existing install keeps printing.
+APP_USER=receipt
+APP_GROUPS=$(getent group lp | cut -d: -f3)
+if [ -e "$PRINTER_DEVICE" ]; then
+  DEVICE_GID=$(stat -c %g "$PRINTER_DEVICE")
+  # never hand the app root's group
+  [ "$DEVICE_GID" != "0" ] && APP_GROUPS="$APP_GROUPS,$DEVICE_GID"
+fi
+AS_APP=(setpriv --reuid="$APP_USER" --regid="$APP_USER" --groups "$APP_GROUPS")
+if [ -e "$PRINTER_DEVICE" ] && ! "${AS_APP[@]}" test -w "$PRINTER_DEVICE"; then
+  echo "WARNING: $PRINTER_DEVICE is not writable by the unprivileged '$APP_USER' user; running the app as root. Make the device group-writable on the host (for example mode 660, group lp) to drop root."
+  AS_APP=()
+fi
+
+# Start the web control panel (gunicorn, one worker: the login lockout and
+# test-print cooldown are kept in that process).
+echo "Starting web control panel..."
+"${AS_APP[@]}" python3 -u -m gunicorn --chdir /app --bind "${WEB_BIND:-0.0.0.0}:8080" \
+  --workers 1 --threads 4 --timeout 30 --access-logfile - \
+  web_control_panel:app &
 
 # Start the MQTT handler (-u: its stdout is a pipe; unbuffered so prints
 # appear in docker logs immediately)
 # exec: python becomes PID 1 so it receives docker's SIGTERM (bash as PID 1
-# ignores it, and the handler's graceful shutdown never ran). A failing
-# handler now simply exits non-zero, which is what the container reports.
+# ignores it, and the handler's graceful shutdown never ran). setpriv execs
+# the program, so it stays PID 1. A failing handler simply exits non-zero,
+# which is what the container reports.
 echo "Starting MQTT handler..."
-exec python3 -u /app/printer_mqtt_handler.py
+exec "${AS_APP[@]}" python3 -u /app/printer_mqtt_handler.py

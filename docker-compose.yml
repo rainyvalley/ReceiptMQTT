@@ -10,31 +10,62 @@ services:
     # never pin a /dev/bus/usb/NNN/NNN path here (renumbering broke
     # printing for ten days once).
     environment:
-      - PRINTER_DEVICE=${PRINTER_DEVICE:-/dev/usb/lp1}
-      # Match the production queue options the old PPD stack ran with
-      # (FeedDist=0feed3mm, Cutting=0NoCutting): no extra feed, no cut.
-      # Print jobs queue behind the one printing; when this many are waiting,
-      # newer messages are dropped, logged and published to printer/last_error.
-      - PRINT_QUEUE_SIZE=${PRINT_QUEUE_SIZE:-16}
-      # Optional overrides (code defaults shown; see README "Optional settings").
+      # Everything below can be set in .env; the value after :- is used when
+      # a setting is missing or empty. See README "Settings".
+      - PRINTER_DEVICE=${PRINTER_DEVICE:-${PAPER_DEVICE:-/dev/usb/lp1}}
       - PRINTER_NAME=${PRINTER_NAME:-ReceiptPrinter}
-      - MQTT_PAPER_TOPIC=${MQTT_PAPER_TOPIC:-printer/paper}
-      - MQTT_PAPER_LOW_TOPIC=${MQTT_PAPER_LOW_TOPIC:-printer/paper_low}
+      - PRINTER_URI=${PRINTER_URI:-}
+      # Feed and cut after each receipt. These match the old setup (no extra
+      # feed, no cut). The program's own defaults, used by plain `docker
+      # run`, are FEED_DIST=2 and CUTTING=1.
+      - FEED_DIST=${FEED_DIST:-0}
+      - CUTTING=${CUTTING:-0}
+      - BLANK_SPACE=${BLANK_SPACE:-1}
+      - CASH_DRAWER1=${CASH_DRAWER1:-0}
+      - CASH_DRAWER2=${CASH_DRAWER2:-0}
       - RASTER_DPI_X=${RASTER_DPI_X:-203}
       - RASTER_DPI_Y=${RASTER_DPI_Y:-203}
       - RASTER_WIDTH_PX=${RASTER_WIDTH_PX:-384}
-      - FEED_DIST=0
-      - CUTTING=0
+      - RASTER_HEIGHT_PX=${RASTER_HEIGHT_PX:-480}
+      # Print jobs queue behind the one printing; when this many are waiting,
+      # newer messages are dropped, logged and published to printer/last_error.
+      - PRINT_QUEUE_SIZE=${PRINT_QUEUE_SIZE:-16}
+      - MAX_JOBS_PER_MINUTE=${MAX_JOBS_PER_MINUTE:-30}
       - MQTT_BROKER=${MQTT_BROKER:-your-broker-ip}
-      # Opt-in connection settings; defaults keep plain MQTT on 1883.
       - MQTT_PORT=${MQTT_PORT:-1883}
       - MQTT_TLS=${MQTT_TLS:-}
       - MQTT_TLS_CA=${MQTT_TLS_CA:-}
       - MQTT_TLS_INSECURE=${MQTT_TLS_INSECURE:-}
       - MQTT_USERNAME=${MQTT_USERNAME:-your-username}
       - MQTT_PASSWORD=${MQTT_PASSWORD:? .env must set MQTT_PASSWORD}
+      - MQTT_TOPIC=${MQTT_TOPIC:-printer/commands}
+      - MQTT_PAPER_TOPIC=${MQTT_PAPER_TOPIC:-printer/paper}
+      - MQTT_PAPER_LOW_TOPIC=${MQTT_PAPER_LOW_TOPIC:-printer/paper_low}
+      - MQTT_LAST_ERROR_TOPIC=${MQTT_LAST_ERROR_TOPIC:-printer/last_error}
+      - MQTT_DROPPED_TOTAL_TOPIC=${MQTT_DROPPED_TOTAL_TOPIC:-printer/dropped_total}
+      - MQTT_FAILED_TOTAL_TOPIC=${MQTT_FAILED_TOTAL_TOPIC:-printer/failed_total}
+      - WEB_BIND=${WEB_BIND:-}
       - ADMIN_USER=${ADMIN_USER:-admin}
       - ADMIN_PASS=${ADMIN_PASS:? .env must set ADMIN_PASS}
+      - LOGIN_MAX_FAILURES=${LOGIN_MAX_FAILURES:-5}
+      - LOGIN_LOCKOUT_SECONDS=${LOGIN_LOCKOUT_SECONDS:-60}
+      - TEST_PRINT_COOLDOWN=${TEST_PRINT_COOLDOWN:-10}
+    # Hardening. The entrypoint starts CUPS as root, then runs the app as an
+    # unprivileged user, so it needs these few capabilities and nothing else.
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETUID
+      - SETGID
+      - KILL
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 512m
     ulimits:
       nofile:
         soft: 65536
@@ -42,8 +73,6 @@ services:
     # Graceful shutdown joins the print worker for up to 10s; give it room
     # before docker SIGKILLs (default is 10s).
     stop_grace_period: 15s
-    stdin_open: true
-    tty: true
     # An unreachable broker at boot is retried with backoff and mid-run
     # outages reconnect on their own; restart covers any other crash.
     restart: unless-stopped
