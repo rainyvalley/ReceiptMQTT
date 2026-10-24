@@ -223,3 +223,27 @@ class TestRenderAll:
         setup = escpos.CASH_DRAWER[0] + b"\x1b@"
         assert out.count(setup) == 1          # setup, not per page
         assert pages == 2
+
+class TestPaperWidth:
+    def test_default_is_48(self):
+        assert escpos.paper_width_mm({}) == 48
+        assert escpos.PAPER_PROFILES[48] == (384, 48)
+
+    def test_80_mm(self):
+        assert escpos.paper_width_mm({"PAPER_WIDTH_MM": "80"}) == 80
+        assert escpos.PAPER_PROFILES[80] == (576, 72)
+
+    @pytest.mark.parametrize("raw", ["58", "abc", "0", "-80"])
+    def test_bad_value_falls_back_to_48(self, raw, capsys):
+        assert escpos.paper_width_mm({"PAPER_WIDTH_MM": raw}) == 48
+        assert "PAPER_WIDTH_MM" in capsys.readouterr().out
+
+    def test_module_follows_env(self, monkeypatch):
+        import importlib
+        monkeypatch.setenv("PAPER_WIDTH_MM", "80")
+        mod = importlib.reload(escpos)
+        try:
+            assert (mod.PAPER_WIDTH_PX, mod.MAX_WIDTH_BYTES) == (576, 72)
+        finally:
+            monkeypatch.delenv("PAPER_WIDTH_MM")
+            importlib.reload(escpos)

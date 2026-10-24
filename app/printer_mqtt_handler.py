@@ -79,7 +79,7 @@ printer_device = (os.getenv("PRINTER_DEVICE") or os.getenv("PAPER_DEVICE")
 # with a loud warning, not silently cut.
 RASTER_DPI_X = _env_int("RASTER_DPI_X", 203)
 RASTER_DPI_Y = _env_int("RASTER_DPI_Y", 203)
-RASTER_WIDTH_PX = _env_int("RASTER_WIDTH_PX", 384)
+RASTER_WIDTH_PX = _env_int("RASTER_WIDTH_PX", escpos.PAPER_WIDTH_PX)
 RASTER_HEIGHT_PX = _env_int("RASTER_HEIGHT_PX", 480)
 
 # DLE EOT 4 - real-time paper sensor status request. "Real-time" means the
@@ -677,11 +677,9 @@ def break_word(word, max_width, font="Helvetica", size=10):
 
 def generate_pdf(title, message, pdf_path):
     """Generate a PDF optimized for thermal receipt printers."""
-    # Fixed page width; height is dynamic
-    # 48 mm roll = 384 px at 203 dpi. RASTER_WIDTH_PX must match (and
-    # escpos.MAX_WIDTH_BYTES caps rows at 48 bytes), so wider paper is not
-    # supported yet.
-    page_width = 48 * mm
+    # Page width follows PAPER_WIDTH_MM (48 mm = 384 px, 80 mm = 576 px at
+    # 203 dpi); height is dynamic.
+    page_width = escpos.PAPER_WIDTH_MM * mm
     margin = 5 * mm  # Margins for the receipt
     content_width = page_width - (2 * margin)
 

@@ -26,7 +26,28 @@ CASH_DRAWER = (bytes((ESC, 0x70, 0x00, 0x40, 0x50)),
 SKIPPED_BLANK_LINES = 24  # rastertozj.c skiplines(24) for blank bands
 ENDPAGE_FEED = 0x18       # rastertozj.c skiplines(0x18) perFeedDist unit
 MAX_BAND_LINES = 24       # ESC/POS raster band height from rastertozj.c
-MAX_WIDTH_BYTES = 48      # rastertozj.c caps width at 0x180 px = 48 bytes
+
+# Paper width -> (raster dots at 203 dpi, bytes per raster row).
+PAPER_PROFILES = {48: (384, 48), 80: (576, 72)}
+
+
+def paper_width_mm(env=None):
+    """PAPER_WIDTH_MM from the environment: 48 (default) or 80."""
+    raw = (os.environ if env is None else env).get("PAPER_WIDTH_MM", "").strip()
+    if not raw:
+        return 48
+    try:
+        mm = int(raw)
+    except ValueError:
+        mm = 0
+    if mm not in PAPER_PROFILES:
+        print(f"Ignoring invalid PAPER_WIDTH_MM={raw!r}; using 48 (allowed: 48, 80)")
+        return 48
+    return mm
+
+
+PAPER_WIDTH_MM = paper_width_mm()
+PAPER_WIDTH_PX, MAX_WIDTH_BYTES = PAPER_PROFILES[PAPER_WIDTH_MM]
 
 
 class EscposSettings:

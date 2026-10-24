@@ -2,7 +2,7 @@
 
 PrintMQTTify prints MQTT messages on a USB thermal receipt printer. It runs in Docker. Send it a message from Home Assistant, Node-RED or any MQTT client, and a receipt comes out.
 
-It works with Zijiang **ZJ-58**, the widely sold **POS58**, and clones that speak ESC/POS. It prints on **48 mm** wide paper. A typical use is a Home Assistant shopping list, reminder or alert.
+It works with Zijiang **ZJ-58**, the widely sold **POS58**, and clones that speak ESC/POS. It prints on **48 mm** wide paper by default. For 80 mm paper, see [Paper width](#paper-width). A typical use is a Home Assistant shopping list, reminder or alert.
 
 ## What you get
 
@@ -13,7 +13,7 @@ It works with Zijiang **ZJ-58**, the widely sold **POS58**, and clones that spea
 
 What it does not do yet:
 
-- **80 mm paper.** The code is fixed to 48 mm paper (384 dots). `RASTER_WIDTH_PX` does not change that.
+- **Proof that 80 mm works.** 80 mm paper is supported by one setting, but it has not been tested on a real printer.
 - **Long receipts.** About **10 lines** of message text fit on one receipt. Text below that is cut off and a warning is logged. See [Long receipts](#long-receipts).
 - **Printers that only receive.** The paper sensors need a printer that can answer back. If yours cannot, printing still works and the sensors stay empty.
 
@@ -124,7 +124,8 @@ The availability topic is always `printer/availability`.
 | `CUTTING` | `0` with Compose, `1` with plain `docker run` | `0` no cut. `1` cut after each page. `2` cut at the end of the job. |
 | `BLANK_SPACE` | `1` | `1` does not feed blank space at the end of a receipt. `0` feeds it. |
 | `CASH_DRAWER1`, `CASH_DRAWER2` | `0` | `0` off. `1` open the drawer before printing. `2` open it after. |
-| `RASTER_WIDTH_PX` | `384` | Page width in dots. Leave it at 384 (48 mm at 203 dpi). |
+| `PAPER_WIDTH_MM` | `48` | Paper width: `48` or `80`. See [Paper width](#paper-width). |
+| `RASTER_WIDTH_PX` | empty | Page width in dots. Leave it empty: `PAPER_WIDTH_MM` sets it (384 for 48 mm, 576 for 80 mm). |
 | `RASTER_HEIGHT_PX` | `480` | Longest receipt in dot lines. 480 is about 60 mm. See [Long receipts](#long-receipts). |
 | `RASTER_DPI_X`, `RASTER_DPI_Y` | `203` | Print resolution. |
 
@@ -156,21 +157,22 @@ A number that is not a whole number, or is too small, is ignored and the default
 - On `docker stop` the job being printed gets up to 10 seconds to finish. Jobs still waiting are discarded and logged.
 - If the broker is down when the container starts, it keeps trying with a growing delay. It also reconnects by itself after an outage.
 
-### Using an 80 mm printer
+### Paper width
 
-**80 mm paper is not supported and has not been tested.** This is what the code does today:
+Set **`PAPER_WIDTH_MM`** in `.env` (or in `docker-compose.yml`) and restart the container:
 
-- The PDF page is fixed at 48 mm. See `page_width = 48 * mm` in `generate_pdf()` in `app/printer_mqtt_handler.py`.
-- `MAX_WIDTH_BYTES = 48` in `app/escpos.py` cuts every printed row to 48 bytes (384 dots).
-- Setting `RASTER_WIDTH_PX` alone does not fix this. The page stays 48 mm wide, so the picture is scaled or cropped, and the rows are still cut to 48 bytes.
+```
+PAPER_WIDTH_MM=80
+```
 
-To try 80 mm you would have to change three things together, then check the result on a real printer:
+| Value | Dots | Paper |
+|---|---|---|
+| `48` (default) | 384 | ZJ-58 / POS58 |
+| `80` | 576 | ZJ-80 and other 80 mm printers |
 
-1. `page_width` in `generate_pdf()` to the new paper width (80 mm).
-2. `MAX_WIDTH_BYTES` in `app/escpos.py` to the new row size (72 bytes for 576 dots).
-3. `RASTER_WIDTH_PX` to `576`.
+Any other value is ignored and 48 is used, with a line in the log.
 
-Until that is done and checked on hardware, treat 80 mm as unsupported.
+**80 mm has not been tested on a real printer.** It is covered by unit tests only. If a receipt comes out cut off or too narrow, set `PAPER_WIDTH_MM` back to `48` and open an issue.
 
 ### Long receipts
 

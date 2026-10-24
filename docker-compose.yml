@@ -23,9 +23,12 @@ services:
       - BLANK_SPACE=${BLANK_SPACE:-1}
       - CASH_DRAWER1=${CASH_DRAWER1:-0}
       - CASH_DRAWER2=${CASH_DRAWER2:-0}
+      # Paper width in mm: 48 (default) or 80. This one setting sets the page,
+      # dot width and row size. 80 mm has not been tested on a real printer.
+      - PAPER_WIDTH_MM=${PAPER_WIDTH_MM:-48}
       - RASTER_DPI_X=${RASTER_DPI_X:-203}
       - RASTER_DPI_Y=${RASTER_DPI_Y:-203}
-      - RASTER_WIDTH_PX=${RASTER_WIDTH_PX:-384}
+      - RASTER_WIDTH_PX=${RASTER_WIDTH_PX:-}
       - RASTER_HEIGHT_PX=${RASTER_HEIGHT_PX:-480}
       # Print jobs queue behind the one printing; when this many are waiting,
       # newer messages are dropped, logged and published to printer/last_error.
