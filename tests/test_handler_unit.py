@@ -48,8 +48,8 @@ def fresh_worker():
 def recorded_jobs(monkeypatch):
     calls = []
 
-    def fake_print_job(title, message, printer_name):
-        calls.append((title, message, printer_name))
+    def fake_print_job(title, message):
+        calls.append((title, message))
 
     monkeypatch.setattr(h, "print_job", fake_print_job)
     return calls
@@ -63,7 +63,7 @@ class TestOnMessage:
                           "title": "Alert", "message": "hello"}).encode()
         h.on_message(None, None, FakeMsg(raw))
         h.flush_jobs()
-        assert recorded_jobs == [("Alert", "hello", "ReceiptPrinter")]
+        assert recorded_jobs == [("Alert", "hello")]
 
     def test_retained_message_not_printed(self, recorded_jobs):
         raw = json.dumps({"printer_name": "P", "message": "old"}).encode()
@@ -87,7 +87,7 @@ class TestOnMessage:
         raw = json.dumps({"printer_name": "P"}).encode()
         h.on_message(None, None, FakeMsg(raw))
         h.flush_jobs()
-        assert recorded_jobs == [("Print Job", "No message provided", "P")]
+        assert recorded_jobs == [("Print Job", "No message provided")]
 
     def test_bad_json_never_reaches_print_job(self, recorded_jobs, capsys):
         h.on_message(None, None, FakeMsg(b"{not json"))
@@ -123,7 +123,7 @@ class TestOnMessage:
                           "message": message}).encode()
         h.on_message(None, None, FakeMsg(raw))
         h.flush_jobs()
-        assert recorded_jobs == [(str(title), str(message), "P")]
+        assert recorded_jobs == [(str(title), str(message))]
 
     def test_long_title_capped(self, recorded_jobs):
         raw = json.dumps({"printer_name": "P", "title": "T" * 1000,
@@ -152,7 +152,7 @@ class TestOnMessage:
         assert message == "ok  done"           # byte dropped, not replaced
 
     def test_print_job_failure_is_caught(self, monkeypatch):
-        def boom(title, message, printer_name):
+        def boom(title, message):
             raise RuntimeError("gs exploded")
         # on_message resolves print_job from the module namespace at call
         # time, so patch the real one this time instead of the fixture.
@@ -173,7 +173,7 @@ class TestSendRawToPrinter:
                             lambda path, data: written.update(path=path,
                                                               data=data) or len(data))
         monkeypatch.setattr(h, "printer_device", "/tmp/dev")
-        h.send_raw_to_printer("R", self.PAYLOAD)
+        h.send_raw_to_printer(self.PAYLOAD)
         assert written == {"path": "/tmp/dev", "data": self.PAYLOAD}
 
     def test_busy_then_success_retries(self, monkeypatch):
@@ -190,7 +190,7 @@ class TestSendRawToPrinter:
         monkeypatch.setattr(h, "_write_device", flaky)
         monkeypatch.setattr(h, "printer_device", "/tmp/dev")
         monkeypatch.setattr(h.time, "sleep", lambda s: sleeps.append(s))
-        h.send_raw_to_printer("R", self.PAYLOAD)
+        h.send_raw_to_printer(self.PAYLOAD)
         assert len(attempts) == 4
         assert sleeps == [h.DEVICE_BUSY_BACKOFF] * 3
 
@@ -205,7 +205,7 @@ class TestSendRawToPrinter:
         monkeypatch.setattr(h, "printer_device", "/tmp/dev")
         monkeypatch.setattr(h.time, "sleep", lambda s: None)
         with pytest.raises(OSError) as exc:
-            h.send_raw_to_printer("R", self.PAYLOAD)
+            h.send_raw_to_printer(self.PAYLOAD)
         assert exc.value.errno == errno.EBUSY
         assert len(attempts) == h.DEVICE_BUSY_RETRIES
 
@@ -220,14 +220,14 @@ class TestSendRawToPrinter:
         monkeypatch.setattr(h, "printer_device", "/tmp/dev")
         monkeypatch.setattr(h.time, "sleep", lambda s: None)
         with pytest.raises(OSError) as exc:
-            h.send_raw_to_printer("R", self.PAYLOAD)
+            h.send_raw_to_printer(self.PAYLOAD)
         assert exc.value.errno == errno.EIO
         assert len(attempts) == 1
 
     def test_no_device_configured_raises(self, monkeypatch):
         monkeypatch.setattr(h, "printer_device", "")
         with pytest.raises(RuntimeError, match="PRINTER_DEVICE"):
-            h.send_raw_to_printer("R", self.PAYLOAD)
+            h.send_raw_to_printer(self.PAYLOAD)
 
     def test_partial_writes_drained(self, monkeypatch):
         # os.write may accept fewer bytes than handed to it; the loop in
@@ -423,11 +423,11 @@ class TestGeneratePdf:
 
     def test_line_count_drives_height(self, tmp_path):
         pdf = tmp_path / "lines.pdf"
-        message = "\n".join(["abcdefghij"] * 20)
+        message = "\n".join(["abcdefghij"] * 12)
         page_height = h.generate_pdf("T", message, str(pdf))
         # title + footer add two lines beyond the message itself
         assert page_height == pytest.approx(
-            self.MARGIN * h.mm + (20 + 2) * self.LINE_HEIGHT)
+            self.MARGIN * h.mm + (12 + 2) * self.LINE_HEIGHT)
 
     def test_blank_lines_kept_as_vertical_gaps(self, tmp_path):
         pdf_a = tmp_path / "a.pdf"
@@ -460,8 +460,8 @@ class TestGeneratePdf:
     def test_height_grows_monotonically_with_content(self, tmp_path):
         pdf = tmp_path / "m.pdf"
         heights = [h.generate_pdf("T", " ".join(["w"] * n), str(pdf))
-                   for n in (1, 200, 800)]
-        assert heights[0] < heights[1] < heights[2]
+                   for n in (1, 150, 800)]
+        assert heights[0] < heights[1] <= heights[2]
 
 
 # ------------------------------------------------------------------ shutdown
@@ -550,3 +550,182 @@ class TestGracefulShutdown:
         assert c.events[0][0] == "publish"
         assert c.events[-1] == ("disconnect",)
         assert threading.current_thread() not in c.threads
+
+
+# ---------------------------------------------------------- audit additions
+
+class TestGeneratePdfLineCap:
+    def test_huge_message_makes_a_bounded_page(self, tmp_path):
+        height = h.generate_pdf("T", "\n" * 60000, str(tmp_path / "big.pdf"))
+        # still taller than the raster cap (so the truncation warning fires)
+        # but nowhere near 60000 lines
+        cap_pt = h.RASTER_HEIGHT_PX * 72 / h.RASTER_DPI_Y
+        assert height > cap_pt
+        assert height < cap_pt + 12 * 12
+
+    def test_truncation_is_still_warned(self, tmp_path, capsys, monkeypatch):
+        monkeypatch.setattr(h.subprocess, "run", lambda *a, **k: types.SimpleNamespace(
+            stdout=escpos.selftest_pbm(), returncode=0))
+        pdf = tmp_path / "t.pdf"
+        height = h.generate_pdf("T", "\n".join(["x"] * 500), str(pdf))
+        h.pdf_to_escpos(str(pdf), escpos.EscposSettings(), height)
+        assert "capped to RASTER_HEIGHT_PX" in capsys.readouterr().out
+
+
+class TestRejectedMessagesPublished:
+    @pytest.fixture
+    def events(self, monkeypatch):
+        seen = []
+        h.shutdown_worker()
+        monkeypatch.setattr(h, "report_event",
+                            lambda *a: seen.append(a))
+        yield seen
+        h.shutdown_worker()
+
+    @pytest.mark.parametrize("raw,detail", [
+        (b"{not json", "not valid JSON"),
+        (b"[1, 2]", "not a JSON object"),
+        (b'"text"', "not a JSON object"),
+        (b'{"title": "T"}', "missing printer_name"),
+    ])
+    def test_rejection_is_reported_and_counted(self, events, raw, detail):
+        h.on_message(None, None, FakeMsg(raw))
+        assert len(events) == 1
+        kind, label, text, dropped, failed = events[0]
+        assert kind == "failed" and detail in text
+        assert failed == 1 and dropped == 0
+
+    def test_message_body_not_published(self, events):
+        h.on_message(None, None, FakeMsg(b'{"message": "SECRET-BODY"}'))
+        assert "SECRET-BODY" not in repr(events)
+
+    def test_title_newlines_collapsed(self, events, monkeypatch):
+        jobs = []
+        monkeypatch.setattr(h, "print_job", lambda t, m: jobs.append(t))
+        h.on_message(None, None, FakeMsg(
+            b'{"printer_name": "P", "title": "a\\nb\\tc", "message": "m"}'))
+        h.flush_jobs()
+        assert jobs == ["a b c"]
+
+
+class TestRateLimit:
+    def test_over_limit_dropped_and_reported(self):
+        seen = []
+        w = h.PrintWorker(100, reporter=lambda *a: seen.append(a),
+                          max_per_minute=3)
+        done = []
+        for i in range(5):
+            w.submit(lambda: done.append(1), label=f"j{i}")
+        w.flush()
+        assert len(done) == 3
+        assert w.dropped == 2
+        assert [e[0] for e in seen] == ["dropped", "dropped"]
+        assert "rate limit" in repr(seen[0])
+        w.stop(2)
+
+    def test_window_slides(self, monkeypatch):
+        now = [1000.0]
+        monkeypatch.setattr(h.time, "monotonic", lambda: now[0])
+        w = h.PrintWorker(100, max_per_minute=1)
+        assert w.submit(lambda: None) is True
+        assert w.submit(lambda: None) is False
+        now[0] += 61
+        assert w.submit(lambda: None) is True
+        w.flush()
+        w.stop(2)
+
+    def test_zero_means_unlimited(self):
+        w = h.PrintWorker(100, max_per_minute=0)
+        assert all(w.submit(lambda: None) for _ in range(50))
+        w.flush()
+        w.stop(2)
+
+
+class TestStartupWarnings:
+    def test_anonymous_warns(self):
+        out = h.startup_warnings(user=None, pw=None, env={})
+        assert any("without a username" in w for w in out)
+
+    def test_credentials_present_no_anonymous_warning(self):
+        out = h.startup_warnings(user="u", pw="p", env={"MQTT_TLS": "1"})
+        assert out == []
+
+    def test_placeholder_username_warns(self):
+        out = h.startup_warnings(user="your-username", pw="p",
+                                 env={"MQTT_TLS": "1"})
+        assert any("placeholder" in w for w in out)
+
+    def test_plain_mqtt_to_remote_broker_warns(self, monkeypatch):
+        monkeypatch.setattr(h, "broker", "192.0.2.10")
+        assert any("MQTT_TLS is off" in w
+                   for w in h.startup_warnings("u", "p", env={}))
+
+    def test_plain_mqtt_to_localhost_is_quiet(self, monkeypatch):
+        monkeypatch.setattr(h, "broker", "localhost")
+        assert h.startup_warnings("u", "p", env={}) == []
+
+
+class TestEnvRobustness:
+    def test_empty_topic_env_uses_default(self, monkeypatch):
+        import importlib
+        monkeypatch.setenv("MQTT_TOPIC", "")
+        monkeypatch.setenv("RASTER_DPI_X", "junk")
+        monkeypatch.setenv("PRINTER_DEVICE", "")
+        monkeypatch.setenv("PAPER_DEVICE", "/dev/usb/lp7")
+        try:
+            m = importlib.reload(h)
+            assert m.topic == "printer/commands"
+            assert m.RASTER_DPI_X == 203
+            assert m.printer_device == "/dev/usb/lp7"
+        finally:
+            monkeypatch.undo()
+            importlib.reload(h)
+
+    def test_escpos_junk_value_logged(self, capsys):
+        s = escpos.EscposSettings.from_env({"CUTTING": "yes"})
+        assert s.cutting == 1
+        assert "Ignoring invalid CUTTING" in capsys.readouterr().err
+
+
+class TestAvailabilityPoll:
+    @pytest.fixture(autouse=True)
+    def _setup(self, monkeypatch):
+        monkeypatch.setattr(h.subprocess, "run", lambda *a, **k: types.SimpleNamespace(
+            returncode=0, stdout="printer P is idle", stderr=""))
+        monkeypatch.setattr(h, "query_paper", lambda: None)
+        h.SHUTDOWN.clear()
+        yield
+        h.SHUTDOWN.set()      # lets any poller thread exit
+        time.sleep(0.05)
+        h.SHUTDOWN.clear()
+
+    def _first_publish(self, monkeypatch, device_exists):
+        monkeypatch.setattr(h.os.path, "exists", lambda p: device_exists)
+        c = RecordingClient()
+        h.publish_availability(c, interval=60)
+        deadline = time.time() + 3
+        while not c.events and time.time() < deadline:
+            time.sleep(0.01)
+        return c.events[0][2]
+
+    def test_missing_device_node_is_offline(self, monkeypatch):
+        assert self._first_publish(monkeypatch, False) == "offline"
+
+    def test_present_device_node_is_online(self, monkeypatch):
+        assert self._first_publish(monkeypatch, True) == "online"
+
+    def test_publish_error_does_not_end_the_thread(self, monkeypatch, capsys):
+        monkeypatch.setattr(h.os.path, "exists", lambda p: True)
+        attempts = []
+
+        class Failing:
+            def publish(self, *a, **k):
+                attempts.append(1)
+                raise ValueError("bad topic")
+
+        t = h.publish_availability(Failing(), interval=0.01)
+        deadline = time.time() + 3
+        while len(attempts) < 3 and time.time() < deadline:
+            time.sleep(0.01)
+        assert len(attempts) >= 3 and t.is_alive()
+        assert "Availability poll failed" in capsys.readouterr().out

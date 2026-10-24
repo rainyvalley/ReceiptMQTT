@@ -126,7 +126,7 @@ def test_on_message_runs_job_off_calling_thread(monkeypatch):
     seen = {}
     done = threading.Event()
 
-    def fake_print_job(title, message, printer_name):
+    def fake_print_job(title, message):
         seen["thread"] = threading.current_thread()
         done.set()
 

@@ -30,7 +30,7 @@ def main(device_path):
     # host; here the mounted-file stand-in has to exist before the send
     # path opens it O_WRONLY|O_SYNC.
     os.close(os.open(device_path, os.O_RDWR | os.O_CREAT, 0o644))
-    send_raw_to_printer("ReceiptPrinter", PAYLOAD)
+    send_raw_to_printer(PAYLOAD)
     with open(device_path, "rb") as fh:
         got = fh.read()
     assert got == PAYLOAD, f"device mismatch: got {got.hex()!r}"

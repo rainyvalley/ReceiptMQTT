@@ -50,11 +50,13 @@ class EscposSettings:
 
         def int_env(name, default):
             raw = env.get(name)
-            if raw is None or raw == "":
+            if raw is None or not raw.strip():
                 return default
             try:
                 return int(raw)
             except ValueError:
+                print(f"Ignoring invalid {name}={raw!r}; using {default}",
+                      file=sys.stderr)
                 return default
 
         return cls(int_env("CASH_DRAWER1", 0), int_env("CASH_DRAWER2", 0),

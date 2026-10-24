@@ -2,6 +2,7 @@ try:
     import paho.mqtt.client as mqtt
 except ImportError:  # imported for pipeline unit use (tests) without broker deps
     mqtt = None
+import collections
 import errno
 import os
 import select
@@ -25,43 +26,6 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import escpos
-
-# Read broker, username, and password from environment variables
-broker = os.getenv("MQTT_BROKER", "localhost")
-username = os.getenv("MQTT_USERNAME")
-password = os.getenv("MQTT_PASSWORD")
-topic = os.getenv("MQTT_TOPIC", "printer/commands")
-availability_topic = "printer/availability"
-last_error_topic = os.getenv("MQTT_LAST_ERROR_TOPIC", "printer/last_error")
-dropped_total_topic = os.getenv("MQTT_DROPPED_TOTAL_TOPIC", "printer/dropped_total")
-failed_total_topic = os.getenv("MQTT_FAILED_TOTAL_TOPIC", "printer/failed_total")
-paper_topic = os.getenv("MQTT_PAPER_TOPIC", "printer/paper")
-paper_low_topic = os.getenv("MQTT_PAPER_LOW_TOPIC", "printer/paper_low")
-printer_device = os.getenv("PRINTER_DEVICE", os.getenv("PAPER_DEVICE", "/dev/usb/lp1"))
-
-# Default receipt printer settings: ghostscript renders the reportlab PDF at
-# 203 dpi into a 384 px wide raster (48 mm roll), matching the old PPD's
-# X48MMY60MM page. The raster height is sized per receipt from the PDF page
-# height; RASTER_HEIGHT_PX is a hard cap - taller receipts are truncated
-# with a loud warning, not silently cut.
-RASTER_DPI_X = int(os.getenv("RASTER_DPI_X", "203"))
-RASTER_DPI_Y = int(os.getenv("RASTER_DPI_Y", "203"))
-RASTER_WIDTH_PX = int(os.getenv("RASTER_WIDTH_PX", "384"))
-RASTER_HEIGHT_PX = int(os.getenv("RASTER_HEIGHT_PX", "480"))
-
-# DLE EOT 4 - real-time paper sensor status request. "Real-time" means the
-# printer answers immediately rather than queueing the request behind print
-# data, so this works even while a job is running.
-PAPER_QUERY = b"\x10\x04\x04"
-
-POLL_TIMEOUT = 0.25       # select wait per attempt
-POLL_ATTEMPTS = 3         # <=0.75s total hold; jobs hitting EBUSY retry
-
-# Subprocess ceilings. gs runs on the print worker thread and lpstat on the
-# availability thread: without a timeout a wedged child blocks either one
-# forever (keepalive lost / availability frozen at its last value).
-GS_TIMEOUT = 60
-LPSTAT_TIMEOUT = 10
 
 
 def _env_int(name, default, minimum=1):
@@ -92,6 +56,45 @@ def _env_bool(name, default=False, env=None):
         return False
     print(f"Ignoring invalid {name}={raw!r}; using {default}")
     return default
+
+
+# Read broker, username, and password from environment variables
+broker = os.getenv("MQTT_BROKER") or "localhost"
+username = os.getenv("MQTT_USERNAME")
+password = os.getenv("MQTT_PASSWORD")
+topic = os.getenv("MQTT_TOPIC") or "printer/commands"
+availability_topic = "printer/availability"
+last_error_topic = os.getenv("MQTT_LAST_ERROR_TOPIC") or "printer/last_error"
+dropped_total_topic = os.getenv("MQTT_DROPPED_TOTAL_TOPIC") or "printer/dropped_total"
+failed_total_topic = os.getenv("MQTT_FAILED_TOTAL_TOPIC") or "printer/failed_total"
+paper_topic = os.getenv("MQTT_PAPER_TOPIC") or "printer/paper"
+paper_low_topic = os.getenv("MQTT_PAPER_LOW_TOPIC") or "printer/paper_low"
+printer_device = (os.getenv("PRINTER_DEVICE") or os.getenv("PAPER_DEVICE")
+                  or "/dev/usb/lp1")
+
+# Default receipt printer settings: ghostscript renders the reportlab PDF at
+# 203 dpi into a 384 px wide raster (48 mm roll), matching the old PPD's
+# X48MMY60MM page. The raster height is sized per receipt from the PDF page
+# height; RASTER_HEIGHT_PX is a hard cap - taller receipts are truncated
+# with a loud warning, not silently cut.
+RASTER_DPI_X = _env_int("RASTER_DPI_X", 203)
+RASTER_DPI_Y = _env_int("RASTER_DPI_Y", 203)
+RASTER_WIDTH_PX = _env_int("RASTER_WIDTH_PX", 384)
+RASTER_HEIGHT_PX = _env_int("RASTER_HEIGHT_PX", 480)
+
+# DLE EOT 4 - real-time paper sensor status request. "Real-time" means the
+# printer answers immediately rather than queueing the request behind print
+# data, so this works even while a job is running.
+PAPER_QUERY = b"\x10\x04\x04"
+
+POLL_TIMEOUT = 0.25       # select wait per attempt
+POLL_ATTEMPTS = 3         # <=0.75s total hold; jobs hitting EBUSY retry
+
+# Subprocess ceilings. gs runs on the print worker thread and lpstat on the
+# availability thread: without a timeout a wedged child blocks either one
+# forever (keepalive lost / availability frozen at its last value).
+GS_TIMEOUT = 60
+LPSTAT_TIMEOUT = 10
 
 
 # Broker connection. Defaults are the historical behaviour: plain TCP 1883.
@@ -130,6 +133,9 @@ def configure_tls(client, env=None):
 # Jobs waiting behind the one being printed. When full, the NEWEST message
 # is dropped (and counted) so the MQTT network thread never blocks.
 PRINT_QUEUE_SIZE = _env_int("PRINT_QUEUE_SIZE", 16)
+# Jobs accepted per rolling minute; the rest are dropped and reported. Keeps a
+# flood of messages from tying up the printer and ghostscript for hours.
+MAX_JOBS_PER_MINUTE = _env_int("MAX_JOBS_PER_MINUTE", 30)
 SHUTDOWN_JOIN_TIMEOUT = 10   # seconds to wait for the worker on exit
 
 
@@ -165,8 +171,11 @@ def report_event(kind, label, detail, dropped, failed):
     """
     try:
         title = (label or "")[:ERROR_TITLE_CAP]
-        text = f"queue full, job {title!r} dropped" if kind == "dropped" \
-            else f"job {title!r} failed: {(detail or '')[:ERROR_DETAIL_CAP]}"
+        if kind == "dropped":
+            reason = (detail or "queue full")[:ERROR_DETAIL_CAP]
+            text = f"{reason}, job {title!r} dropped"
+        else:
+            text = f"job {title!r} failed: {(detail or '')[:ERROR_DETAIL_CAP]}"
         _safe_publish(last_error_topic, json.dumps({
             "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "kind": kind,
@@ -233,65 +242,76 @@ LAST_AVAILABILITY = "online"
 
 def publish_availability(client, interval=60):
     """Publish printer availability periodically."""
-    printer_name = os.getenv("PRINTER_NAME", "ReceiptPrinter")
+    printer_name = os.getenv("PRINTER_NAME") or "ReceiptPrinter"
+
+    def check_printer():
+        """"online" or "offline": CUPS queue enabled AND device node present."""
+        try:
+            result = subprocess.run(["lpstat", "-p", printer_name], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                    timeout=LPSTAT_TIMEOUT)
+            if result.returncode != 0:
+                print(f"lpstat failed rc={result.returncode}: {result.stderr.strip()}")
+                return "offline"
+            if not result.stdout.strip() or "disabled" in result.stdout:
+                return "offline"
+        except Exception as e:
+            print(f"Error checking printer status: {e}")
+            return "offline"
+        # The CUPS queue stays enabled when the USB printer is unplugged; the
+        # device node is what disappears.
+        if printer_device and not os.path.exists(printer_device):
+            return "offline"
+        # "processing" counts as online; only "disabled" means down
+        return "online"
+
+    def poll_once(state):
+        global LAST_AVAILABILITY
+        status = check_printer()
+
+        # Only log and publish on change; the topic is retained
+        LAST_AVAILABILITY = status
+        if status != state["status"]:
+            print(f"Publishing status: {status}")
+            state["status"] = status
+        with _AVAIL_LOCK:
+            if SHUTDOWN.is_set():
+                return False
+            client.publish(availability_topic, str(status), qos=1, retain=True)
+
+        # Paper sensor. Polled on the same cadence so only one thread
+        # ever touches the device. An unanswered query leaves the last
+        # known value retained rather than reporting a false "out".
+        result = query_paper()
+        if result is None:
+            if not state["warned_no_sensor"] and state["paper"] is None:
+                print(f"No paper status from {printer_device} "
+                      "(printer may be unidirectional)")
+                state["warned_no_sensor"] = True
+        else:
+            paper, low = result
+
+            payload = "ON" if paper else "OFF"
+            if paper != state["paper"]:
+                print(f"Publishing paper: {payload}")
+                state["paper"] = paper
+            client.publish(paper_topic, payload, qos=1, retain=True)
+
+            low_payload = "ON" if low else "OFF"
+            if low != state["low"]:
+                print(f"Publishing paper_low: {low_payload}")
+                state["low"] = low
+            client.publish(paper_low_topic, low_payload, qos=1, retain=True)
+        return True
 
     def publish_status():
-        global LAST_AVAILABILITY
-        last_status = None
-        last_paper = None
-        last_low = None
-        warned_no_sensor = False
+        state = {"status": None, "paper": None, "low": None,
+                 "warned_no_sensor": False}
         while True:
             try:
-                # Check if the printer is available
-                result = subprocess.run(["lpstat", "-p", printer_name], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                                        timeout=LPSTAT_TIMEOUT)
-                if result.returncode != 0:
-                    print(f"lpstat failed rc={result.returncode}: {result.stderr.strip()}")
-                    status = "offline"
-                elif not result.stdout.strip() or "disabled" in result.stdout:
-                    status = "offline"
-                else:
-                    # "processing" counts as online; only "disabled" means down
-                    status = "online"
-            except Exception as e:
-                print(f"Error checking printer status: {e}")
-                status = "offline"
-
-            # Only log and publish on change; the topic is retained
-            LAST_AVAILABILITY = status
-            if status != last_status:
-                print(f"Publishing status: {status}")
-                last_status = status
-            with _AVAIL_LOCK:
-                if SHUTDOWN.is_set():
+                if not poll_once(state):
                     return
-                client.publish(availability_topic, str(status), qos=1, retain=True)
-
-            # Paper sensor. Polled on the same cadence so only one thread
-            # ever touches the device. An unanswered query leaves the last
-            # known value retained rather than reporting a false "out".
-            result = query_paper()
-            if result is None:
-                if not warned_no_sensor and last_paper is None:
-                    print(f"No paper status from {printer_device} "
-                          "(printer may be unidirectional)")
-                    warned_no_sensor = True
-            else:
-                paper, low = result
-
-                payload = "ON" if paper else "OFF"
-                if paper != last_paper:
-                    print(f"Publishing paper: {payload}")
-                    last_paper = paper
-                client.publish(paper_topic, payload, qos=1, retain=True)
-
-                low_payload = "ON" if low else "OFF"
-                if low != last_low:
-                    print(f"Publishing paper_low: {low_payload}")
-                    last_low = low
-                client.publish(paper_low_topic, low_payload, qos=1, retain=True)
-
+            except Exception as e:   # a bad publish must not end the poller
+                print(f"Availability poll failed: {e}")
             time.sleep(interval)
 
     thread = threading.Thread(target=publish_status, daemon=True)
@@ -345,6 +365,30 @@ def connect_with_retry(client, host, port, keepalive=60, stop=None, sleep=None):
             wait(delay)
             delay = min(delay * 2, CONNECT_BACKOFF_MAX)
     return False
+
+
+def startup_warnings(user=None, pw=None, env=None):
+    """Plain-language warnings about an open MQTT setup (printed at start)."""
+    env = os.environ if env is None else env
+    user = username if user is None else user
+    pw = password if pw is None else pw
+    warnings = []
+    if not (user and pw):
+        warnings.append(
+            "WARNING: connecting to the MQTT broker without a username and "
+            "password. Anyone who can publish to the command topic can print. "
+            "Set MQTT_USERNAME and MQTT_PASSWORD and limit who may publish "
+            f"to '{topic}' in the broker.")
+    elif user == "your-username":
+        warnings.append(
+            "WARNING: MQTT_USERNAME is still the placeholder 'your-username'.")
+    if (not _env_bool("MQTT_TLS", False, env)
+            and broker not in ("localhost", "127.0.0.1", "::1")):
+        warnings.append(
+            "WARNING: MQTT_TLS is off, so the broker login and every print "
+            "job cross the network unencrypted. Turn on MQTT_TLS if the "
+            "broker is not on this machine.")
+    return warnings
 
 
 def install_term_handler(client):
@@ -408,8 +452,10 @@ class PrintWorker:
 
     _STOP = object()   # sentinel: wakes a blocked worker on shutdown
 
-    def __init__(self, maxsize, reporter=None):
+    def __init__(self, maxsize, reporter=None, max_per_minute=0):
         self._reporter = reporter   # (kind, label, detail, dropped, failed)
+        self._max_per_minute = max_per_minute   # 0 = no limit
+        self._accepted = collections.deque()    # monotonic times of accepted jobs
         self._queue = queue.Queue(maxsize=maxsize)
         self._stop = threading.Event()
         self._thread = None
@@ -443,6 +489,14 @@ class PrintWorker:
         Never blocks. Starts the worker on first use.
         """
         self.start()
+        if not self._rate_ok():
+            with self._lock:
+                self.dropped += 1
+                total = self.dropped
+            print(f"WARNING: more than {self._max_per_minute} jobs in a minute; "
+                  f"dropped newest message ({total} dropped since start)")
+            self._report("dropped", label, "rate limit")
+            return False
         try:
             self._queue.put_nowait(job)
             return True
@@ -454,6 +508,25 @@ class PrintWorker:
                   f"dropped newest message ({total} dropped since start)")
             self._report("dropped", label, "")
             return False
+
+    def _rate_ok(self):
+        """Sliding one-minute window; records the job when it is accepted."""
+        if self._max_per_minute <= 0:
+            return True
+        now = time.monotonic()
+        with self._lock:
+            while self._accepted and now - self._accepted[0] > 60:
+                self._accepted.popleft()
+            if len(self._accepted) >= self._max_per_minute:
+                return False
+            self._accepted.append(now)
+            return True
+
+    def reject(self, label, detail):
+        """Count and publish a message that was refused before queueing."""
+        with self._lock:
+            self.failed += 1
+        self._report("failed", label, detail)
 
     def _run(self):
         while not self._stop.is_set():
@@ -514,7 +587,8 @@ def get_worker():
     global _WORKER
     with _WORKER_LOCK:
         if _WORKER is None:
-            _WORKER = PrintWorker(PRINT_QUEUE_SIZE, reporter=report_event)
+            _WORKER = PrintWorker(PRINT_QUEUE_SIZE, reporter=report_event,
+                                 max_per_minute=MAX_JOBS_PER_MINUTE)
         return _WORKER
 
 
@@ -546,14 +620,19 @@ def on_message(client, userdata, msg):
     print(f"Received message on topic {msg.topic}")
     try:
         payload = json.loads(payload_text)
+        if not isinstance(payload, dict):
+            raise ValueError("Payload is not a JSON object")
         printer_name = payload.get("printer_name")
         # Coerce: JSON can carry numbers/lists/null here, which would fail
-        # later on the worker thread.
-        title = str(payload.get("title", "Print Job"))[:MAX_TITLE_CHARS]
+        # later on the worker thread. Newlines would draw as one long line.
+        title = " ".join(str(payload.get("title", "Print Job")).split())
+        title = title[:MAX_TITLE_CHARS]
         message = str(payload.get("message", "No message provided"))
 
         if not printer_name:
-            raise ValueError("Missing 'printer_name' in payload")
+            get_worker().reject(title, "missing printer_name")
+            print("Error handling message: Missing 'printer_name' in payload")
+            return
 
         # Cap intake: page height and gs raster memory scale with the
         # message; a 64KB message already means a several-meter receipt.
@@ -565,14 +644,16 @@ def on_message(client, userdata, msg):
         # EBUSY retries while the paper poll holds the device). Runs on the
         # print worker thread, not paho's network thread; print_job is
         # looked up at run time.
-        job = lambda: print_job(title, message, printer_name)
+        job = lambda: print_job(title, message)
         job.label = title   # only echoed (capped) in drop/failure reports
         get_worker().submit(job, label=title)
 
     except json.JSONDecodeError as e:
         print(f"Error decoding JSON: {e}")
+        get_worker().reject("", "message is not valid JSON")
     except Exception as e:
         print(f"Error handling message: {e}")
+        get_worker().reject("", "message is not a JSON object")
 
 
 def break_word(word, max_width, font="Helvetica", size=10):
@@ -597,7 +678,10 @@ def break_word(word, max_width, font="Helvetica", size=10):
 def generate_pdf(title, message, pdf_path):
     """Generate a PDF optimized for thermal receipt printers."""
     # Fixed page width; height is dynamic
-    page_width = 48 * mm  # must match PRINTER_RASTER_WIDTH_PX or gs scales/crops
+    # 48 mm roll = 384 px at 203 dpi. RASTER_WIDTH_PX must match (and
+    # escpos.MAX_WIDTH_BYTES caps rows at 48 bytes), so wider paper is not
+    # supported yet.
+    page_width = 48 * mm
     margin = 5 * mm  # Margins for the receipt
     content_width = page_width - (2 * margin)
 
@@ -636,8 +720,14 @@ def generate_pdf(title, message, pdf_path):
         if current_line:
             lines.append(current_line)
 
-    # Calculate the required height for the content
+    # Nothing below the raster cap is ever printed, so stop here: a huge
+    # message must not make a huge PDF for ghostscript to chew on.
     line_height = 12  # Line height in points
+    max_lines = int(RASTER_HEIGHT_PX * 72 / RASTER_DPI_Y / line_height) + 4
+    if len(lines) > max_lines:
+        lines = lines[:max_lines]
+
+    # Calculate the required height for the content
     calculated_height = margin + (len(lines) + 2) * line_height  # Extra lines for title and footer
 
     # Ensure the page height is always greater than the width for portrait orientation
@@ -753,7 +843,7 @@ def write_device_retrying(path, data):
     raise last_err
 
 
-def send_raw_to_printer(printer_name, escpos_bytes):
+def send_raw_to_printer(escpos_bytes):
     """Deliver a pre-rendered ESC/POS bytestring to the printer.
 
     Writes directly to the printer character device (PRINTER_DEVICE).
@@ -774,8 +864,8 @@ def send_raw_to_printer(printer_name, escpos_bytes):
     print(f"Wrote {n} ESC/POS bytes to {printer_device}.")
 
 
-def print_job(title, message, printer_name):
-    """Full pipeline for one MQTT message: PDF, raster, ESC/POS, queue."""
+def print_job(title, message):
+    """Full pipeline for one MQTT message: PDF, raster, ESC/POS, device."""
     settings = escpos.EscposSettings.from_env()
 
     fd, pdf_path = tempfile.mkstemp(prefix="print_job_", suffix=".pdf")
@@ -789,9 +879,8 @@ def print_job(title, message, printer_name):
         except OSError:
             pass
 
-    send_raw_to_printer(printer_name, escpos_bytes)
+    send_raw_to_printer(escpos_bytes)
     print(f"Printed {len(escpos_bytes)} ESC/POS bytes.")
-    return escpos_bytes
 
 
 if __name__ == "__main__":
@@ -808,6 +897,8 @@ if __name__ == "__main__":
     else:
         client = None
 
+    for line in startup_warnings():
+        print(line)
     if username and password:
         client.username_pw_set(username, password)
     configure_tls(client)
