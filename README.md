@@ -225,7 +225,7 @@ WEB_TLS_KEY=/certs/panel.key
 |---|---|---|
 | Browser warns about the certificate | It is self-signed. | Accept it once, or import `panel.crt` into your browser. |
 | Container exits with "not readable by the app user" | The files are missing or private to root. | Check the mount path and that the files are readable (mode 644). |
-| Container exits with "set both" | Only one of the two settings is set. | Set both, or neither. |
+| Log says "Using plain HTTP" | Only one of the two settings is set, or the cert or key file cannot be read. | Set both, and make the files readable by the app user. |
 
 With curl, add `--cacert certs/panel.crt`. The MQTT connection has its own TLS settings; see `MQTT_TLS` above.
 

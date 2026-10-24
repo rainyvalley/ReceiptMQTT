@@ -119,21 +119,17 @@ fi
 # test-print cooldown are kept in that process).
 # HTTPS is opt-in: set both WEB_TLS_CERT and WEB_TLS_KEY (paths inside the
 # container). With neither set the panel stays plain HTTP. A half-set or
-# unreadable pair stops the start rather than silently serving plain HTTP.
+# unreadable pair is logged as a warning and the panel falls back to plain HTTP.
 TLS_ARGS=()
 if [ -n "${WEB_TLS_CERT:-}" ] || [ -n "${WEB_TLS_KEY:-}" ]; then
   if [ -z "${WEB_TLS_CERT:-}" ] || [ -z "${WEB_TLS_KEY:-}" ]; then
-    echo "ERROR: set both WEB_TLS_CERT and WEB_TLS_KEY, or neither."
-    exit 1
+    echo "WARNING: set both WEB_TLS_CERT and WEB_TLS_KEY. Using plain HTTP."
+  elif ! "${AS_APP[@]}" test -r "$WEB_TLS_CERT" || ! "${AS_APP[@]}" test -r "$WEB_TLS_KEY"; then
+    echo "WARNING: the HTTPS cert or key is missing or not readable by the app user. Using plain HTTP."
+  else
+    TLS_ARGS=(--certfile "$WEB_TLS_CERT" --keyfile "$WEB_TLS_KEY")
+    echo "Control panel will use HTTPS."
   fi
-  for f in "$WEB_TLS_CERT" "$WEB_TLS_KEY"; do
-    if ! "${AS_APP[@]}" test -r "$f"; then
-      echo "ERROR: $f is missing or not readable by the app user."
-      exit 1
-    fi
-  done
-  TLS_ARGS=(--certfile "$WEB_TLS_CERT" --keyfile "$WEB_TLS_KEY")
-  echo "Control panel will use HTTPS."
 fi
 echo "Starting web control panel..."
 "${AS_APP[@]}" python3 -u -m gunicorn --chdir /app --bind "${WEB_BIND:-0.0.0.0}:8080" "${TLS_ARGS[@]}" \
