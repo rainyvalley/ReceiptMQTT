@@ -264,3 +264,54 @@ def test_startup_note_mentions_plain_http():
 def test_index_sends_the_csrf_header(client):
     body = client.get("/", headers=auth_pair()).get_data(as_text=True)
     assert "X-Requested-With" in body
+
+
+# ---- HTTPS (opt-in) ----
+
+def test_tls_paths_need_both(monkeypatch):
+    assert w.tls_paths({}) is None
+    assert w.tls_paths({"WEB_TLS_CERT": "/c"}) is None
+    assert w.tls_paths({"WEB_TLS_CERT": "/c", "WEB_TLS_KEY": "/k"}) == ("/c", "/k")
+
+
+def test_startup_note_plain_http_only_when_exposed():
+    assert w.startup_warnings({"WEB_BIND": "127.0.0.1"}) == []
+    assert w.startup_warnings({"WEB_TLS_CERT": "/c", "WEB_TLS_KEY": "/k"}) == []
+    assert "plain HTTP" in " ".join(w.startup_warnings({}))
+    assert "only one" in " ".join(w.startup_warnings({"WEB_TLS_CERT": "/c"}))
+
+
+def test_gunicorn_serves_https_with_generated_cert(tmp_path):
+    import shutil, socket, ssl, subprocess, sys, time, urllib.request, pathlib
+    if not shutil.which("openssl"):
+        pytest.skip("openssl not installed")
+    pytest.importorskip("gunicorn")
+    root = pathlib.Path(__file__).resolve().parent.parent
+    subprocess.run([str(root / "scripts" / "make-cert.sh"), str(tmp_path)],
+                   check=True, capture_output=True)
+    s = socket.socket(); s.bind(("127.0.0.1", 0)); port = s.getsockname()[1]; s.close()
+    env = dict(__import__("os").environ, ADMIN_PASS="pw")
+    p = subprocess.Popen(
+        [sys.executable, "-m", "gunicorn", "--chdir", str(root / "app"),
+         "--bind", f"127.0.0.1:{port}", "--certfile", str(tmp_path / "panel.crt"),
+         "--keyfile", str(tmp_path / "panel.key"), "web_control_panel:app"],
+        env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        ctx = ssl.create_default_context(cafile=str(tmp_path / "panel.crt"))
+        req = urllib.request.Request(f"https://localhost:{port}/status")
+        import base64
+        req.add_header("Authorization", "Basic " + base64.b64encode(b"admin:pw").decode())
+        for _ in range(50):
+            try:
+                with urllib.request.urlopen(req, context=ctx, timeout=2) as r:
+                    assert r.status == 200
+                break
+            except urllib.error.HTTPError as e:
+                assert e.code in (200, 500, 503)  # TLS worked; probe result varies
+                break
+            except (urllib.error.URLError, ConnectionError):
+                time.sleep(0.2)
+        else:
+            pytest.fail("HTTPS panel never answered")
+    finally:
+        p.terminate(); p.wait(10)

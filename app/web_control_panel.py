@@ -7,7 +7,8 @@ Endpoints:
 
 CUPS itself is loopback-only now that printing is a raw queue, so this panel
 is the only network-facing surface besides MQTT. It is protected with HTTP
-Basic auth using ADMIN_USER / ADMIN_PASS and speaks plain HTTP: put a reverse
+Basic auth using ADMIN_USER / ADMIN_PASS and speaks plain HTTP unless WEB_TLS_CERT and
+WEB_TLS_KEY are set (then the entrypoint serves HTTPS); otherwise put a reverse
 proxy with TLS in front of it, or keep it on localhost. Repeated wrong
 passwords from one address are locked out for a while, and /test-print has a
 cooldown. There is no settings form: real configuration happens through
@@ -117,15 +118,32 @@ def _record_success(addr):
         _failures.pop(addr, None)
 
 
+def tls_paths(env=None):
+    """(cert, key) from WEB_TLS_CERT / WEB_TLS_KEY, or None for plain HTTP."""
+    env = os.environ if env is None else env
+    cert = (env.get("WEB_TLS_CERT") or "").strip()
+    key = (env.get("WEB_TLS_KEY") or "").strip()
+    return (cert, key) if cert and key else None
+
+
 def startup_warnings(env=None):
     """Plain-language notes about the panel's exposure (printed at start)."""
+    env = os.environ if env is None else env
+    cert = (env.get("WEB_TLS_CERT") or "").strip()
+    key = (env.get("WEB_TLS_KEY") or "").strip()
+    if bool(cert) != bool(key):
+        return ["WARNING: set both WEB_TLS_CERT and WEB_TLS_KEY to turn on "
+                "HTTPS; only one is set."]
+    if cert:
+        return []
     bind = web_bind(env)
+    if bind in ("127.0.0.1", "::1", "localhost"):
+        return []
     return [
         "NOTE: the control panel speaks plain HTTP, so its password is "
-        "readable by anyone on the network path. Keep it on localhost "
-        "(WEB_PUBLISH_BIND=127.0.0.1) or put a TLS reverse proxy in front"
-        + (f" (listening on {bind})." if bind not in ("127.0.0.1", "::1")
-           else ".")]
+        "readable by anyone on the network path. Set WEB_TLS_CERT and "
+        "WEB_TLS_KEY for HTTPS, keep it on localhost "
+        f"(WEB_PUBLISH_BIND=127.0.0.1) or use a TLS reverse proxy (listening on {bind})."]
 
 
 CSRF_HEADER_VALUE = "PrintMQTTify"
@@ -260,4 +278,4 @@ for _line in startup_warnings():
 
 
 if __name__ == '__main__':
-    app.run(host=web_bind(), port=8080)
+    app.run(host=web_bind(), port=8080, ssl_context=tls_paths())

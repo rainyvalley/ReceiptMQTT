@@ -117,8 +117,26 @@ fi
 
 # Start the web control panel (gunicorn, one worker: the login lockout and
 # test-print cooldown are kept in that process).
+# HTTPS is opt-in: set both WEB_TLS_CERT and WEB_TLS_KEY (paths inside the
+# container). With neither set the panel stays plain HTTP. A half-set or
+# unreadable pair stops the start rather than silently serving plain HTTP.
+TLS_ARGS=()
+if [ -n "${WEB_TLS_CERT:-}" ] || [ -n "${WEB_TLS_KEY:-}" ]; then
+  if [ -z "${WEB_TLS_CERT:-}" ] || [ -z "${WEB_TLS_KEY:-}" ]; then
+    echo "ERROR: set both WEB_TLS_CERT and WEB_TLS_KEY, or neither."
+    exit 1
+  fi
+  for f in "$WEB_TLS_CERT" "$WEB_TLS_KEY"; do
+    if ! "${AS_APP[@]}" test -r "$f"; then
+      echo "ERROR: $f is missing or not readable by the app user."
+      exit 1
+    fi
+  done
+  TLS_ARGS=(--certfile "$WEB_TLS_CERT" --keyfile "$WEB_TLS_KEY")
+  echo "Control panel will use HTTPS."
+fi
 echo "Starting web control panel..."
-"${AS_APP[@]}" python3 -u -m gunicorn --chdir /app --bind "${WEB_BIND:-0.0.0.0}:8080" \
+"${AS_APP[@]}" python3 -u -m gunicorn --chdir /app --bind "${WEB_BIND:-0.0.0.0}:8080" "${TLS_ARGS[@]}" \
   --workers 1 --threads 4 --timeout 30 --access-logfile - \
   web_control_panel:app &
 

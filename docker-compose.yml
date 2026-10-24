@@ -45,6 +45,10 @@ services:
       - MQTT_DROPPED_TOTAL_TOPIC=${MQTT_DROPPED_TOTAL_TOPIC:-printer/dropped_total}
       - MQTT_FAILED_TOTAL_TOPIC=${MQTT_FAILED_TOTAL_TOPIC:-printer/failed_total}
       - WEB_BIND=${WEB_BIND:-}
+      # HTTPS for the panel: set both (paths inside the container) and mount
+      # the files, see README "Turn on HTTPS". Empty means plain HTTP.
+      - WEB_TLS_CERT=${WEB_TLS_CERT:-}
+      - WEB_TLS_KEY=${WEB_TLS_KEY:-}
       - ADMIN_USER=${ADMIN_USER:-admin}
       - ADMIN_PASS=${ADMIN_PASS:? .env must set ADMIN_PASS}
       - LOGIN_MAX_FAILURES=${LOGIN_MAX_FAILURES:-5}

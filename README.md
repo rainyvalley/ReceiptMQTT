@@ -143,6 +143,7 @@ A number that is not a whole number, or is too small, is ignored and the default
 |---|---|---|
 | `ADMIN_USER`, `ADMIN_PASS` | `admin`, required | Panel login. |
 | `WEB_PUBLISH_BIND` | `0.0.0.0` | Compose only. Host address the panel port is published on. `127.0.0.1` means this machine only. |
+| `WEB_TLS_CERT` / `WEB_TLS_KEY` | off | Paths inside the container to a certificate and its key. Set both to serve the panel over HTTPS. See [Turn on HTTPS](#turn-on-https). |
 | `WEB_BIND` | `0.0.0.0` | Address the panel listens on inside the container. Leave it alone with Docker's normal networking. |
 | `LOGIN_MAX_FAILURES` | `5` | Wrong passwords in a row before an address is locked out. `0` turns the lockout off. |
 | `LOGIN_LOCKOUT_SECONDS` | `60` | How long the lockout lasts. |
@@ -189,7 +190,7 @@ Read this before you leave the panel or the broker open on your network.
 |---|---|---|
 | **Who may print** | Anyone who can publish to the command topic prints. The container does not check who sent a message. | In your broker, allow only Home Assistant to publish to `printer/commands`, and only this container to publish to the other `printer/` topics. This is set up in the broker, not here. |
 | **Broker login and print jobs** | Plain MQTT on port 1883. The password and every message can be read on the network. | Use a TLS listener: `MQTT_PORT=8883`, `MQTT_TLS=1`, and `MQTT_TLS_CA` for a private CA. The container logs a warning when it connects with no login, or without TLS to a broker that is not on this machine. |
-| **Web panel** | Plain HTTP, published on every interface. The password can be read on the network. | Set `WEB_PUBLISH_BIND=127.0.0.1` and reach the panel through an SSH tunnel, or put a reverse proxy with TLS in front. A note about this is logged at start. |
+| **Web panel** | Plain HTTP, published on every interface. The password can be read on the network. | [Turn on HTTPS](#turn-on-https), or set `WEB_PUBLISH_BIND=127.0.0.1` and reach the panel through an SSH tunnel. A note is logged at start while the panel is plain HTTP on a non-local address. |
 | **Panel password guessing** | 5 wrong passwords from one address lock that address out for 60 seconds. | Use a long, unique `ADMIN_PASS`. Behind a reverse proxy all users share the proxy's address. |
 | **Test print** | One test print per 10 seconds. The button sends a header that other websites cannot add. | If you call `/test-print` with curl, add `-H "X-Requested-With: PrintMQTTify"`. |
 | **Flooding** | At most 16 jobs wait and 30 are accepted per minute, counted for all senders together (MQTT does not tell the container who sent a message). Each message is cut to 65,536 characters and to the lines that fit on one receipt before any drawing starts. Every drop is logged and published to `printer/last_error`. | Lower `PRINT_QUEUE_SIZE` or `MAX_JOBS_PER_MINUTE` if you want it stricter. |
@@ -198,6 +199,35 @@ Read this before you leave the panel or the broker open on your network.
 CUPS runs inside the container only for the availability check. It listens on the container's loopback and publishes no port.
 
 ---
+
+### Turn on HTTPS
+
+The panel serves HTTPS when you give it a certificate and key. Without them it stays plain HTTP, so existing installs keep working.
+
+**1. Make a certificate.** Run this on the host, in the folder with `docker-compose.yml`. Add your host name or IP after `certs` if you use one.
+
+```bash
+scripts/make-cert.sh certs printer.local
+```
+
+It writes `certs/panel.crt` and `certs/panel.key`. To use your own certificate instead, skip this step.
+
+**2. Mount the folder and set two lines in `.env`.** In `docker-compose.override.yml` add `volumes: ["./certs:/certs:ro"]` under the service. In `.env`:
+
+```
+WEB_TLS_CERT=/certs/panel.crt
+WEB_TLS_KEY=/certs/panel.key
+```
+
+**3. Restart** with `docker compose up -d`, then open `https://<host>:8080`.
+
+| You see | It means | Do this |
+|---|---|---|
+| Browser warns about the certificate | It is self-signed. | Accept it once, or import `panel.crt` into your browser. |
+| Container exits with "not readable by the app user" | The files are missing or private to root. | Check the mount path and that the files are readable (mode 644). |
+| Container exits with "set both" | Only one of the two settings is set. | Set both, or neither. |
+
+With curl, add `--cacert certs/panel.crt`. The MQTT connection has its own TLS settings; see `MQTT_TLS` above.
 
 ## If something looks wrong
 
