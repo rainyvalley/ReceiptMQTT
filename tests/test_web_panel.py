@@ -13,6 +13,13 @@ import printer_mqtt_handler as h
 import web_control_panel as w
 
 
+@pytest.fixture(autouse=True)
+def _fresh_panel_state():
+    w.reset_state()
+    yield
+    w.reset_state()
+
+
 @pytest.fixture
 def client():
     return w.app.test_client()
@@ -25,6 +32,11 @@ def auth_pair(user="admin", password=None):
         f"{user}:{password if password is not None else 'test-panel-pass'}"
         .encode()).decode()
     return {"Authorization": f"Basic {token}"}
+
+
+def post_pair(**extra):
+    """Auth plus the CSRF header the panel's own page sends."""
+    return dict(auth_pair(), **{"X-Requested-With": "PrintMQTTify"}, **extra)
 
 
 class TestCheckAuth:
@@ -77,7 +89,7 @@ class TestStatus:
 class TestTestPrint:
     def test_printer_name_field_is_ignored(self, client, monkeypatch):
         monkeypatch.setattr(h, "_write_device", lambda path, data: len(data))
-        resp = client.post("/test-print", headers=auth_pair(),
+        resp = client.post("/test-print", headers=post_pair(),
                            data={"printer_name": "Bad Name!"})
         assert json.loads(resp.data)["success"] is True
 
@@ -93,7 +105,7 @@ class TestTestPrint:
 
         monkeypatch.setattr(h, "_write_device", flaky)
         monkeypatch.setattr(h.time, "sleep", lambda s: None)
-        resp = client.post("/test-print", headers=auth_pair())
+        resp = client.post("/test-print", headers=post_pair())
         assert json.loads(resp.data)["success"] is True
         assert len(calls) == 3
 
@@ -101,7 +113,7 @@ class TestTestPrint:
         writes = []
         monkeypatch.setattr(h, "_write_device",
                             lambda path, data: writes.append((path, data)) or len(data))
-        resp = client.post("/test-print", headers=auth_pair(),
+        resp = client.post("/test-print", headers=post_pair(),
                            data={"printer_name": "ReceiptPrinter"})
         body = json.loads(resp.data)
         assert body["success"] is True
@@ -117,7 +129,7 @@ class TestTestPrint:
         writes = []
         monkeypatch.setattr(h, "_write_device",
                             lambda path, data: writes.append(data) or len(data))
-        headers = dict(auth_pair(), **{"Sec-Fetch-Site": site})
+        headers = post_pair(**{"Sec-Fetch-Site": site})
         resp = client.post("/test-print", headers=headers,
                            data={"printer_name": "ReceiptPrinter"})
         assert resp.status_code == 403
@@ -125,7 +137,7 @@ class TestTestPrint:
 
     def test_same_origin_post_allowed(self, client, monkeypatch):
         monkeypatch.setattr(h, "_write_device", lambda path, data: len(data))
-        headers = dict(auth_pair(), **{"Sec-Fetch-Site": "same-origin"})
+        headers = post_pair(**{"Sec-Fetch-Site": "same-origin"})
         resp = client.post("/test-print", headers=headers,
                            data={"printer_name": "ReceiptPrinter"})
         assert json.loads(resp.data)["success"] is True
@@ -135,11 +147,120 @@ class TestTestPrint:
             raise OSError(16, "Device or resource busy")
 
         monkeypatch.setattr(h, "_write_device", busy)
-        resp = client.post("/test-print", headers=auth_pair(),
+        resp = client.post("/test-print", headers=post_pair(),
                            data={"printer_name": "ReceiptPrinter"})
         body = json.loads(resp.data)
         assert body["success"] is False
+        assert resp.status_code == 502
 
     def test_test_print_requires_auth(self, client):
         resp = client.post("/test-print", data={"printer_name": "R"})
         assert resp.status_code == 401
+
+class TestTestPrintCsrfAndCooldown:
+    @pytest.fixture(autouse=True)
+    def _no_cooldown_clock(self, monkeypatch):
+        monkeypatch.setattr(h, "_write_device", lambda path, data: len(data))
+
+    def test_missing_custom_header_refused_even_without_fetch_metadata(
+            self, client):
+        resp = client.post("/test-print", headers=auth_pair())
+        assert resp.status_code == 403
+        assert "X-Requested-With" in json.loads(resp.data)["error"]
+
+    def test_wrong_custom_header_refused(self, client):
+        headers = dict(auth_pair(), **{"X-Requested-With": "XMLHttpRequest"})
+        assert client.post("/test-print", headers=headers).status_code == 403
+
+    def test_refused_post_does_not_start_cooldown(self, client):
+        client.post("/test-print", headers=auth_pair())
+        assert client.post("/test-print", headers=post_pair()).status_code == 200
+
+    def test_second_print_inside_cooldown_gets_429(self, client, monkeypatch):
+        monkeypatch.setattr(w, "TEST_PRINT_COOLDOWN", 10)
+        assert client.post("/test-print", headers=post_pair()).status_code == 200
+        resp = client.post("/test-print", headers=post_pair())
+        assert resp.status_code == 429
+        assert int(resp.headers["Retry-After"]) >= 1
+        assert json.loads(resp.data)["success"] is False
+
+    def test_print_allowed_again_after_cooldown(self, client, monkeypatch):
+        monkeypatch.setattr(w, "TEST_PRINT_COOLDOWN", 10)
+        now = [100.0]
+        monkeypatch.setattr(w.time, "monotonic", lambda: now[0])
+        assert client.post("/test-print", headers=post_pair()).status_code == 200
+        now[0] += 11
+        assert client.post("/test-print", headers=post_pair()).status_code == 200
+
+    def test_cooldown_zero_disables(self, client, monkeypatch):
+        monkeypatch.setattr(w, "TEST_PRINT_COOLDOWN", 0)
+        for _ in range(3):
+            assert client.post("/test-print",
+                               headers=post_pair()).status_code == 200
+
+
+class TestLoginLockout:
+    def test_repeated_wrong_passwords_lock_the_address_out(self, client):
+        for _ in range(w.LOGIN_MAX_FAILURES):
+            assert client.get("/", headers=auth_pair(password="no")
+                              ).status_code == 401
+        resp = client.get("/", headers=auth_pair(password="no"))
+        assert resp.status_code == 429
+        assert int(resp.headers["Retry-After"]) >= 1
+
+    def test_correct_password_also_refused_while_locked(self, client):
+        for _ in range(w.LOGIN_MAX_FAILURES):
+            client.get("/", headers=auth_pair(password="no"))
+        assert client.get("/", headers=auth_pair()).status_code == 429
+
+    def test_lockout_expires(self, client, monkeypatch):
+        now = [500.0]
+        monkeypatch.setattr(w.time, "monotonic", lambda: now[0])
+        for _ in range(w.LOGIN_MAX_FAILURES):
+            client.get("/", headers=auth_pair(password="no"))
+        now[0] += w.LOCKOUT_SECONDS + 1
+        assert client.get("/", headers=auth_pair()).status_code == 200
+
+    def test_success_resets_the_count(self, client):
+        for _ in range(w.LOGIN_MAX_FAILURES - 1):
+            client.get("/", headers=auth_pair(password="no"))
+        assert client.get("/", headers=auth_pair()).status_code == 200
+        for _ in range(w.LOGIN_MAX_FAILURES - 1):
+            client.get("/", headers=auth_pair(password="no"))
+        assert client.get("/", headers=auth_pair()).status_code == 200
+
+    def test_request_without_credentials_is_not_counted(self, client):
+        for _ in range(w.LOGIN_MAX_FAILURES + 3):
+            assert client.get("/").status_code == 401
+        assert client.get("/", headers=auth_pair()).status_code == 200
+
+    def test_other_addresses_unaffected(self, client):
+        for _ in range(w.LOGIN_MAX_FAILURES):
+            client.get("/", headers=auth_pair(password="no"))
+        other = w.app.test_client()
+        resp = other.get("/", headers=auth_pair(),
+                         environ_base={"REMOTE_ADDR": "198.51.100.7"})
+        assert resp.status_code == 200
+
+    def test_disabled_when_zero(self, client, monkeypatch):
+        monkeypatch.setattr(w, "LOGIN_MAX_FAILURES", 0)
+        for _ in range(20):
+            client.get("/", headers=auth_pair(password="no"))
+        assert client.get("/", headers=auth_pair()).status_code == 200
+
+    def test_tracking_table_is_bounded(self, client, monkeypatch):
+        monkeypatch.setattr(w, "MAX_TRACKED_ADDRESSES", 5)
+        for i in range(20):
+            client.get("/", headers=auth_pair(password="no"),
+                       environ_base={"REMOTE_ADDR": f"203.0.113.{i}"})
+        assert len(w._failures) <= 5
+
+
+def test_startup_note_mentions_plain_http():
+    note = " ".join(w.startup_warnings({}))
+    assert "plain HTTP" in note
+
+
+def test_index_sends_the_csrf_header(client):
+    body = client.get("/", headers=auth_pair()).get_data(as_text=True)
+    assert "X-Requested-With" in body

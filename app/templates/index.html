@@ -30,9 +30,21 @@
 
         document.getElementById('test-print-form').addEventListener('submit', async (e) => {
             e.preventDefault();
-            const formData = new FormData(e.target);
-            const response = await fetch('/test-print', { method: 'POST', body: formData });
-            alert(await response.text());
+            let message;
+            try {
+                const response = await fetch('/test-print', {
+                    method: 'POST',
+                    headers: { 'X-Requested-With': 'PrintMQTTify' }
+                });
+                let data = {};
+                try { data = await response.json(); } catch (err) { /* not JSON */ }
+                message = data.success
+                    ? 'Test print sent: ' + (data.output || 'ok')
+                    : 'Test print failed: ' + (data.error || ('HTTP ' + response.status));
+            } catch (err) {
+                message = 'Test print failed: could not reach the panel.';
+            }
+            alert(message);
         });
     </script>
 </body>
