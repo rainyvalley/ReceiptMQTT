@@ -729,3 +729,43 @@ class TestAvailabilityPoll:
             time.sleep(0.01)
         assert len(attempts) >= 3 and t.is_alive()
         assert "Availability poll failed" in capsys.readouterr().out
+
+
+class TestFloodStaysResponsive:
+    def test_flood_of_huge_messages_is_bounded_and_fast(self, monkeypatch):
+        """64K-newline messages: intake returns at once, the page is small,
+        the queue and per-minute limits drop the excess and report it."""
+        h.shutdown_worker()
+        events = []
+        monkeypatch.setattr(h, "report_event", lambda *a: events.append(a))
+        monkeypatch.setattr(h, "MAX_JOBS_PER_MINUTE", 5)
+        monkeypatch.setattr(h, "PRINT_QUEUE_SIZE", 3)
+        heights = []
+
+        def fake_pipeline(title, message):
+            import os, tempfile
+            fd, path = tempfile.mkstemp(suffix=".pdf")
+            os.close(fd)
+            try:
+                heights.append(h.generate_pdf(title, message, path))
+            finally:
+                os.unlink(path)
+
+        monkeypatch.setattr(h, "print_job", fake_pipeline)
+        raw = json.dumps({"printer_name": "P",
+                          "message": "\n" * 70000}).encode()
+        start = time.time()
+        for _ in range(50):
+            h.on_message(None, None, FakeMsg(raw))
+        assert time.time() - start < 5          # network thread not blocked
+        h.flush_jobs()
+        assert 1 <= len(heights) <= 5            # per-minute limit held
+        cap_pt = h.RASTER_HEIGHT_PX * 72 / h.RASTER_DPI_Y
+        assert all(x < cap_pt + 200 for x in heights)
+        assert sum(1 for e in events if e[0] == "dropped") >= 45
+        # worker still alive and accepting after the flood
+        monkeypatch.setattr(h, "MAX_JOBS_PER_MINUTE", 0)
+        h.shutdown_worker()
+        h.on_message(None, None, FakeMsg(raw))
+        h.flush_jobs()
+        h.shutdown_worker()

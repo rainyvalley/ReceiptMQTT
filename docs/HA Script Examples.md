@@ -38,7 +38,7 @@ sequence:
       topic: printer/commands
       payload: |
         {%- set payload = {
-          "printer_name": "SEWOO_LK-T100",
+          "printer_name": "ReceiptPrinter",
           "title": "Shopping List",
           "message": shopping_list_message
         } -%}
@@ -104,7 +104,7 @@ sequence:
       topic: printer/commands
       payload: |
         {%- set payload = {
-          "printer_name": "SEWOO_LK-T100",
+          "printer_name": "ReceiptPrinter",
           "title": "Categorized Shopping List",
           "message": categorized_message
         } -%}

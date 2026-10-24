@@ -1,96 +1,54 @@
 # PrintMQTTify (ZJ-58 / ZJ-80 / POS58 edition)
 
-A Docker-based bridge between MQTT and a USB thermal printer, aimed at cheap ESC/POS thermal receipt printers (Zijiang **ZJ-58** / **ZJ-80**, the widely rebadged **POS58**, and compatible clones). Publish a message to an MQTT topic — from Home Assistant, Node-RED, or anything else — and it prints.
+PrintMQTTify prints MQTT messages on a USB thermal receipt printer. It runs in Docker. Send it a message from Home Assistant, Node-RED or any MQTT client, and a receipt comes out.
 
-This started as a fork of [Aesgarth/PrintMQTTify](https://github.com/Aesgarth/PrintMQTTify), and its printer support started from the **ZJ-58/ZJ-80** CUPS driver by [klirichek/zj-58](https://github.com/klirichek/zj-58). Neither driver is used any more: the ESC/POS encoding was rewritten in Python (`app/escpos.py`, ported from klirichek's filter) and printing goes straight to the device. Printed output is cleaned up too (branding removed, vertical separators, text wrapping).
+It works with Zijiang **ZJ-58**, the widely sold **POS58**, and clones that speak ESC/POS. It prints on **48 mm** wide paper. A typical use is a Home Assistant shopping list, reminder or alert.
 
----
+## What you get
 
-## What it does
+- A listener on one MQTT topic (default `printer/commands`). Each JSON message prints one receipt.
+- Paper and paper-low state, and printer availability, published to MQTT for Home Assistant.
+- A list of dropped and failed jobs, published to MQTT.
+- A small web control panel on port 8080 (always on) with a status check and a **Send Test Print** button.
 
-- Listens on an MQTT topic for print jobs.
-- Formats incoming messages for narrow thermal roll paper (58 mm / 80 mm).
-- Renders each receipt to a bitmap (reportlab -> ghostscript), encodes it as ESC/POS in-app (`app/escpos.py`), and writes the bytes straight to the printer device (`PRINTER_DEVICE`, e.g. `/dev/usb/lp1`). No printer driver, no PPDs, no CUPS filters, and CUPS is not in the print path, so it works identically on amd64 and arm64.
-- Polls the printer's paper sensors over the same device and publishes paper, paper-low and availability state to MQTT.
-- Keeps a small loopback-only CUPS instance purely for monitoring (`lpstat` feeds the availability topic); it never sees print data. CUPS 2.4.10+ silently drops jobs on raw `file:` queues, which is why printing bypasses it — see [`docs/hardware-notes.md`](./docs/hardware-notes.md).
-- Works with USB ESC/POS printers: ZJ-58/ZJ-80 and POS58-class clones, which report varied USB vendor strings (e.g. `STMicroelectronics` / `POS58 Printer USB`) but take the same ESC/POS.
-- Optional web control panel (Basic-auth protected) for status and test prints.
+What it does not do yet:
 
-Typical use: printing Home Assistant shopping lists, reminders, or automation alerts to a receipt printer.
-
-### Added in this fork
-
-- rastertozj's ESC/POS emission ported to Python (`app/escpos.py`), so the deprecated PPD/filter model is gone entirely.
-- Direct device writes: bytes either reach the printer or the log says why (busy devices are retried; no silent "completed" jobs).
-- Shorter receipts: page height tracks the message length; tall receipts are capped at `RASTER_HEIGHT_PX` raster lines (default 480 = the old 60 mm page) and the handler logs a loud warning when the cap truncates, instead of cutting silently.
-- Paper and paper-low state published to MQTT, alongside availability.
-- Prebuilt multi-arch images published by CI; hardware-free pipeline smoke test on every push.
+- **80 mm paper.** The code is fixed to 48 mm paper (384 dots). `RASTER_WIDTH_PX` does not change that.
+- **Long receipts.** About **10 lines** of message text fit on one receipt. Text below that is cut off and a warning is logged. See [Long receipts](#long-receipts).
+- **Printers that only receive.** The paper sensors need a printer that can answer back. If yours cannot, printing still works and the sensors stay empty.
 
 ---
 
-## Deploy
+## Install
 
-You need Docker and a reachable MQTT broker (e.g. Mosquitto). Identify your printer's USB device path first with `lsusb` and `dmesg | grep usb` — usually `/dev/usb/lp0` or `/dev/usb/lp1` (the default is `lp1`). If you have more than one USB printer the numbers can swap across reboots; see [`docs/hardware-notes.md`](./docs/hardware-notes.md).
+You need Docker and an MQTT broker (for example Mosquitto). Find your printer's device with `lsusb` and `dmesg | grep usb`. It is usually `/dev/usb/lp0` or `/dev/usb/lp1`. If you have two USB printers, the numbers can swap after a reboot. See [`docs/hardware-notes.md`](./docs/hardware-notes.md).
 
-**1. Clone this fork:**
+**1. Get the files.**
 
 ```bash
 git clone https://github.com/rainyvalley/ReceiptMQTT.git
 cd ReceiptMQTT
 ```
 
-**2. Choose your install method.**
+**2. Pick an image.**
 
-### Option A: pull the prebuilt image (recommended)
+- **Prebuilt (recommended).** `docker-compose.yml` already points at `ghcr.io/rainyvalley/receiptmqtt:latest`. Compose pulls it on the first start. Other tags: `beta` (test builds) and `sha-<commit>`.
+- **Build it yourself.** Run `docker compose build`, then put `IMAGE_TAG=local` in your `.env`.
 
-CI publishes a multi-arch image (`linux/amd64` and `linux/arm64`) to GHCR on every push to `main` and on version tags. Pull it:
-
-```bash
-docker pull ghcr.io/rainyvalley/receiptmqtt:latest
-```
-
-The tracked `docker-compose.yml` already points at that image, so Compose pulls it for you on first `up`.
-
-Tags available: `latest` (tracks `main`), `beta` (tracks the `beta` branch - test builds before they land on `main`), `sha-<commit>` for every build, and semver tags (`1.2.3`, `1.2`) if you cut `v*` tags. CI also runs the pipeline smoke test on every push before publishing. There is no printer driver inside the image at all: printing is done in-app (reportlab -> ghostscript -> ESC/POS) and written straight to the printer device, so the image is identical on amd64 and arm64.
-
-### Option B: build locally
+**3. Create `.env`** next to `docker-compose.yml`. **`MQTT_PASSWORD` and `ADMIN_PASS` are required.** Compose will not start without them.
 
 ```bash
-docker compose build
-# or
-docker build -t ghcr.io/rainyvalley/receiptmqtt:local .
-```
-
-To use a locally built image with Compose, set `IMAGE_TAG=local` in your `.env` (see step 3).
-
-**3. Configure your settings.**
-
-The tracked `docker-compose.yml` ships with placeholder values on purpose — do **not** commit real credentials into it. Settings go in two local, git-ignored files that Compose picks up automatically.
-
-`.env` (next to `docker-compose.yml`) holds the values. `MQTT_PASSWORD` and `ADMIN_PASS` are **required** — Compose refuses to start without them, and they must be in `.env` (or your shell environment), not in the override file:
-
-```bash
-MQTT_BROKER=192.0.2.10          # your broker IP
+MQTT_BROKER=192.0.2.10          # your broker's address
 MQTT_USERNAME=your-username
 MQTT_PASSWORD=your-password
-ADMIN_PASS=your-panel-password    # Basic-auth password for the control panel
-PRINTER_DEVICE=/dev/usb/lp0       # your printer's device path (default /dev/usb/lp1; the legacy name `PAPER_DEVICE` is still read as a fallback when `PRINTER_DEVICE` is unset)
-# MQTT_PORT=1883                  # optional: broker port (8883 is typical for TLS)
-# MQTT_TLS=1                      # optional: TLS to the broker (default off)
-# MQTT_TLS_CA=/certs/ca.pem       # optional: CA bundle inside the container (default: system CAs)
-# MQTT_TLS_INSECURE=1             # optional: skip hostname check (lab only, default off)
-# WEB_PUBLISH_BIND=127.0.0.1      # optional: publish the panel on localhost only (default 0.0.0.0)
-# PRINT_QUEUE_SIZE=16             # optional: max jobs waiting behind the one printing (default 16)
-# PRINTER_NAME=ReceiptPrinter     # optional: CUPS queue name used for the lpstat availability check (default ReceiptPrinter)
-# MQTT_PAPER_TOPIC=printer/paper  # optional: paper-present topic (default printer/paper)
-# MQTT_PAPER_LOW_TOPIC=printer/paper_low  # optional: paper-low topic (default printer/paper_low)
-# RASTER_DPI_X=203                # optional: ghostscript horizontal dpi (default 203)
-# RASTER_DPI_Y=203                # optional: ghostscript vertical dpi (default 203)
-# RASTER_WIDTH_PX=384             # optional: raster width in pixels (default 384 = 48 mm at 203 dpi)
-# IMAGE_TAG=beta                  # or `local` for a locally built image
+ADMIN_PASS=your-panel-password  # password for the web panel
+PRINTER_DEVICE=/dev/usb/lp0     # your printer (default /dev/usb/lp1)
+# WEB_PUBLISH_BIND=127.0.0.1    # recommended: panel on this machine only
 ```
 
-Map the printer into the container via `.env`/compose (the override file is local and git-ignored). The device path must match `PRINTER_DEVICE`:
+Every other setting is in [Settings](#settings).
+
+**4. Give the container the printer.** Create `docker-compose.override.yml` next to `docker-compose.yml`. The path must be the same as `PRINTER_DEVICE`.
 
 ```yaml
 services:
@@ -99,61 +57,177 @@ services:
       - "/dev/usb/lp0:/dev/usb/lp0"
 ```
 
-Map the `/dev/usb/lpN` node, never a `/dev/bus/usb/NNN/NNN` path — those renumber when the printer is replugged.
+Map the `/dev/usb/lpN` file, never a `/dev/bus/usb/...` path. Those numbers change when you replug the printer.
 
-**4. Start it:**
+**5. Start it.**
 
 ```bash
 docker compose up -d
 ```
 
-### Alternative: run with `docker run`
-
-If you'd rather skip Compose, you can start the container directly. Pass your broker details as environment variables and map your printer's USB device:
-
-```bash
-docker run --name printmqttify_container \
-  -d \
-  -p 8080:8080 \
-  --device=/dev/usb/lp0:/dev/usb/lp0 \
-  --ulimit nofile=65536:65536 \
-  -e PRINTER_DEVICE="/dev/usb/lp0" \
-  -e MQTT_BROKER="192.0.2.10" \
-  -e MQTT_USERNAME="your-username" \
-  -e MQTT_PASSWORD="your-password" \
-  -e MQTT_TOPIC="printer/commands" \
-  -e ADMIN_USER="admin" \
-  -e ADMIN_PASS="your-panel-password" \
-  ghcr.io/rainyvalley/receiptmqtt:latest
-```
-
-Flags: `--device` gives the container access to the printer, `-p 8080:8080` publishes the (Basic-auth-protected) control panel. CUPS is loopback-only inside the container, monitoring-only, and needs no published port — the app writes ESC/POS bytes straight to `PRINTER_DEVICE`, which must match the `--device` path. Replace the placeholder values with your own — and note these are visible in your shell history, so the `.env` method above is preferable for anything sensitive.
-
-**5. Send a test message.** See [Home Assistant](#home-assistant) below, or from a shell:
+**6. Print something.**
 
 ```bash
 mosquitto_pub -h <broker> -u <user> -P <pass> -t printer/commands \
   -m '{"printer_name": "ReceiptPrinter", "title": "Test", "message": "Hello, World!"}'
 ```
 
-Check logs with `docker logs printmqttify_container` if nothing prints.
+Nothing came out? Run `docker logs printmqttify_container` and read [If something looks wrong](#if-something-looks-wrong).
 
-**Job queue.** Messages are printed one at a time, in arrival order, by a single background worker, so a slow render or print never stalls the MQTT connection. Up to `PRINT_QUEUE_SIZE` jobs (default `16`, integer >= 1; invalid values fall back to the default) can wait behind the one printing. If the queue is full, the *newest* message is dropped and a `WARNING: print queue full ... dropped newest message` line with a running drop count is logged and the drop is published to MQTT (see [Dropped and failed jobs](#dropped-and-failed-jobs)). Jobs that raise while printing are likewise logged and published. On `docker stop` (SIGTERM) the job in flight gets up to 10 s to finish; jobs still waiting are discarded and logged. With `docker run`, pass `-e PRINT_QUEUE_SIZE=32` to change it.
+You can also open `http://<host>:8080`, log in with `ADMIN_USER` (default `admin`) and `ADMIN_PASS`, and press **Send Test Print**. That prints a test pattern without MQTT.
 
-### Settings
+### Without Compose
+
+```bash
+docker run --name printmqttify_container -d \
+  -p 127.0.0.1:8080:8080 \
+  --device=/dev/usb/lp0:/dev/usb/lp0 \
+  --cap-drop ALL \
+  --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER \
+  --cap-add SETUID --cap-add SETGID --cap-add KILL --cap-add NET_BIND_SERVICE \
+  --security-opt no-new-privileges:true \
+  --env-file .env \
+  ghcr.io/rainyvalley/receiptmqtt:latest
+```
+
+Put the settings in `.env` as above, not on the command line, so they stay out of your shell history. Plain `docker run` uses the program's own defaults for feeding and cutting (see `FEED_DIST` and `CUTTING` below), which differ from Compose.
+
+---
+
+## Settings
+
+Set these in `.env`. Compose passes them on. A setting that is missing or empty uses its default.
+
+**Broker**
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `MQTT_PORT` | `1883` | Broker port (invalid or out-of-range values fall back to 1883). |
-| `MQTT_TLS` | off | `1`/`true`/`yes`/`on` enables TLS to the broker using the system CA store. |
-| `MQTT_TLS_CA` | unset | Path (inside the container) to a CA bundle to trust instead of the system CAs. Mount it read-only. |
-| `MQTT_TLS_INSECURE` | off | Skip broker hostname verification. Lab use only; logs a warning. |
-| `WEB_BIND` | `0.0.0.0` | Address the control panel binds to inside the container. Leave it alone under Docker bridge networking; see below. |
-| `WEB_PUBLISH_BIND` | `0.0.0.0` | Compose only: host address the panel port is published on (`127.0.0.1` = this machine only). |
+| `MQTT_BROKER` | `your-broker-ip` | Broker address. |
+| `MQTT_PORT` | `1883` | Broker port. 8883 is usual for TLS. A bad value falls back to 1883. |
+| `MQTT_USERNAME`, `MQTT_PASSWORD` | placeholder, required | Broker login. With no login the container still starts but logs a warning. |
+| `MQTT_TLS` | off | `1` turns on TLS to the broker, using the system CA list. |
+| `MQTT_TLS_CA` | system CAs | Path inside the container to a CA file, for a private CA. Mount it read-only. |
+| `MQTT_TLS_INSECURE` | off | Skip the broker name check. Lab use only. A warning is logged. |
+| `MQTT_TOPIC` | `printer/commands` | Topic that print jobs arrive on. |
+| `MQTT_PAPER_TOPIC`, `MQTT_PAPER_LOW_TOPIC` | `printer/paper`, `printer/paper_low` | Paper sensor topics. |
+| `MQTT_LAST_ERROR_TOPIC`, `MQTT_DROPPED_TOTAL_TOPIC`, `MQTT_FAILED_TOTAL_TOPIC` | `printer/last_error`, `printer/dropped_total`, `printer/failed_total` | Topics for [dropped and failed jobs](#dropped-and-failed-jobs). |
 
-### Securing the deployment
+The availability topic is always `printer/availability`.
 
-All of the above are opt-in; with nothing set, behaviour is unchanged (plain MQTT on 1883, panel on every interface). To harden it: point the app at a TLS listener (`MQTT_PORT=8883`, `MQTT_TLS=1`, plus `MQTT_TLS_CA` for a private CA), keep the panel local-only by setting `WEB_PUBLISH_BIND=127.0.0.1` in `.env` (the same as editing the mapping to `127.0.0.1:8080:8080`, or `-p 127.0.0.1:8080:8080` with `docker run`; reach it through an SSH tunnel or reverse proxy), and use strong, unique values for `MQTT_PASSWORD` and `ADMIN_PASS`. `WEB_BIND` only matters when running the app outside Docker's bridge networking (host networking or bare metal); inside a bridge-networked container it must stay `0.0.0.0` or the published port cannot reach it.
+**Printer and paper**
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `PRINTER_DEVICE` | `/dev/usb/lp1` | The printer's device file. The older name `PAPER_DEVICE` is used if `PRINTER_DEVICE` is not set. |
+| `PRINTER_NAME` | `ReceiptPrinter` | Name of the small monitoring queue the availability check looks at. It is not used for printing. |
+| `FEED_DIST` | `0` with Compose, `2` with plain `docker run` | How many extra paper feeds after each receipt. Each is about 3 mm. |
+| `CUTTING` | `0` with Compose, `1` with plain `docker run` | `0` no cut. `1` cut after each page. `2` cut at the end of the job. |
+| `BLANK_SPACE` | `1` | `1` does not feed blank space at the end of a receipt. `0` feeds it. |
+| `CASH_DRAWER1`, `CASH_DRAWER2` | `0` | `0` off. `1` open the drawer before printing. `2` open it after. |
+| `RASTER_WIDTH_PX` | `384` | Page width in dots. Leave it at 384 (48 mm at 203 dpi). |
+| `RASTER_HEIGHT_PX` | `480` | Longest receipt in dot lines. 480 is about 60 mm. See [Long receipts](#long-receipts). |
+| `RASTER_DPI_X`, `RASTER_DPI_Y` | `203` | Print resolution. |
+
+**Queue and limits**
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `PRINT_QUEUE_SIZE` | `16` | Jobs that may wait behind the one printing. When full, the newest message is dropped. |
+| `MAX_JOBS_PER_MINUTE` | `30` | Jobs accepted per minute. The rest are dropped and reported. |
+
+A number that is not a whole number, or is too small, is ignored and the default is used. A line in the log says so.
+
+**Web panel**
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `ADMIN_USER`, `ADMIN_PASS` | `admin`, required | Panel login. |
+| `WEB_PUBLISH_BIND` | `0.0.0.0` | Compose only. Host address the panel port is published on. `127.0.0.1` means this machine only. |
+| `WEB_BIND` | `0.0.0.0` | Address the panel listens on inside the container. Leave it alone with Docker's normal networking. |
+| `LOGIN_MAX_FAILURES` | `5` | Wrong passwords in a row before an address is locked out. `0` turns the lockout off. |
+| `LOGIN_LOCKOUT_SECONDS` | `60` | How long the lockout lasts. |
+| `TEST_PRINT_COOLDOWN` | `10` | Seconds you must wait between test prints. `0` turns it off. |
+
+### How jobs are handled
+
+- Jobs print one at a time, in the order they arrive. A slow print never stalls the MQTT connection.
+- If `PRINT_QUEUE_SIZE` jobs are already waiting, or more than `MAX_JOBS_PER_MINUTE` came in the last minute, the **newest** message is dropped. A warning is logged and the drop is [published to MQTT](#dropped-and-failed-jobs).
+- On `docker stop` the job being printed gets up to 10 seconds to finish. Jobs still waiting are discarded and logged.
+- If the broker is down when the container starts, it keeps trying with a growing delay. It also reconnects by itself after an outage.
+
+### Using an 80 mm printer
+
+**80 mm paper is not supported and has not been tested.** This is what the code does today:
+
+- The PDF page is fixed at 48 mm. See `page_width = 48 * mm` in `generate_pdf()` in `app/printer_mqtt_handler.py`.
+- `MAX_WIDTH_BYTES = 48` in `app/escpos.py` cuts every printed row to 48 bytes (384 dots).
+- Setting `RASTER_WIDTH_PX` alone does not fix this. The page stays 48 mm wide, so the picture is scaled or cropped, and the rows are still cut to 48 bytes.
+
+To try 80 mm you would have to change three things together, then check the result on a real printer:
+
+1. `page_width` in `generate_pdf()` to the new paper width (80 mm).
+2. `MAX_WIDTH_BYTES` in `app/escpos.py` to the new row size (72 bytes for 576 dots).
+3. `RASTER_WIDTH_PX` to `576`.
+
+Until that is done and checked on hardware, treat 80 mm as unsupported.
+
+### Long receipts
+
+By default a receipt is at most 480 dot lines, about 60 mm. That is the title, the divider and about 10 lines of message text. Anything lower is cut, and the log says:
+
+`Receipt raster needs N lines; capped to RASTER_HEIGHT_PX=480, lower text is cut`
+
+To print longer receipts, raise `RASTER_HEIGHT_PX` in `.env` (for example `1600` for about 200 mm), then run `docker compose up -d` again. Nothing is published to MQTT when a receipt is cut. Only the log shows it.
+
+---
+
+## Security
+
+Read this before you leave the panel or the broker open on your network.
+
+| What | Default | What to do |
+|---|---|---|
+| **Who may print** | Anyone who can publish to the command topic prints. The container does not check who sent a message. | In your broker, allow only Home Assistant to publish to `printer/commands`, and only this container to publish to the other `printer/` topics. This is set up in the broker, not here. |
+| **Broker login and print jobs** | Plain MQTT on port 1883. The password and every message can be read on the network. | Use a TLS listener: `MQTT_PORT=8883`, `MQTT_TLS=1`, and `MQTT_TLS_CA` for a private CA. The container logs a warning when it connects with no login, or without TLS to a broker that is not on this machine. |
+| **Web panel** | Plain HTTP, published on every interface. The password can be read on the network. | Set `WEB_PUBLISH_BIND=127.0.0.1` and reach the panel through an SSH tunnel, or put a reverse proxy with TLS in front. A note about this is logged at start. |
+| **Panel password guessing** | 5 wrong passwords from one address lock that address out for 60 seconds. | Use a long, unique `ADMIN_PASS`. Behind a reverse proxy all users share the proxy's address. |
+| **Test print** | One test print per 10 seconds. The button sends a header that other websites cannot add. | If you call `/test-print` with curl, add `-H "X-Requested-With: PrintMQTTify"`. |
+| **Flooding** | At most 16 jobs wait and 30 are accepted per minute, counted for all senders together (MQTT does not tell the container who sent a message). Each message is cut to 65,536 characters and to the lines that fit on one receipt before any drawing starts. Every drop is logged and published to `printer/last_error`. | Lower `PRINT_QUEUE_SIZE` or `MAX_JOBS_PER_MINUTE` if you want it stricter. |
+| **Container rights** | The app runs as an unprivileged user with almost all Linux capabilities dropped. | If the device file is not group-writable on the host, the app runs as root instead and logs a warning. Make the device mode `660` and group `lp` on the host to avoid that. |
+
+CUPS runs inside the container only for the availability check. It listens on the container's loopback and publishes no port.
+
+---
+
+## If something looks wrong
+
+Run `docker logs printmqttify_container`.
+
+| You see | It means | Do this |
+|---|---|---|
+| `Wrote N ESC/POS bytes to /dev/usb/lpN.` | The job reached the printer. | Nothing. If paper did not move, check the cable and that the printer is on. |
+| `Error printing job: ...` | The job failed, often because the device path is wrong. | Check `PRINTER_DEVICE` and the `devices:` line match. See [`docs/troubleshooting.md`](./docs/troubleshooting.md). |
+| `Device busy (attempt 1/8); retrying shortly` | Something else was using the printer for a moment. | Nothing. It retries for about 2 seconds. |
+| `Receipt raster needs N lines; capped...` | The receipt is too long. | See [Long receipts](#long-receipts). |
+| `WARNING: print queue full ...` | Jobs arrive faster than they print. | Send fewer, or raise `PRINT_QUEUE_SIZE`. |
+| `WARNING: more than 30 jobs in a minute ...` | Too many messages in one minute. | Find what is sending them, or raise `MAX_JOBS_PER_MINUTE`. |
+| `Error decoding JSON` or `Missing 'printer_name'` | The message was refused. | Fix the payload. Compare it with the example in [Printing a message](#printing-a-message). |
+| `Cannot reach MQTT broker ...; retrying in Ns` | The broker address, port or network is wrong, or the broker is down. | Check `MQTT_BROKER` and `MQTT_PORT`. |
+| `Failed to connect, return code 4` (or `5`) | The broker refused the login (4) or the account is not allowed (5). | Check `MQTT_USERNAME` and `MQTT_PASSWORD`. |
+| `No paper status from ... (printer may be unidirectional)` | The printer does not answer the paper query. | Printing is fine. The paper sensors stay empty. |
+| `WARNING: ... is not writable by the unprivileged 'receipt' user` | The app is running as root. | See the container rights row in [Security](#security). |
+| `WARNING: connecting to the MQTT broker without a username and password` | No broker login is set. | Set `MQTT_USERNAME` and `MQTT_PASSWORD`. |
+
+The paper sensors and the availability topic:
+
+| Topic value | It means |
+|---|---|
+| `printer/availability` is `online` | The container is running, its monitoring queue is enabled, and the device file exists. |
+| `printer/availability` is `offline` | The container stopped, or the device file is missing (for example, the printer was unplugged). It does not detect a printer that is plugged in but switched off or jammed. |
+| `printer/paper` is `ON` / `OFF` | Paper present / out of paper. |
+| `printer/paper_low` is `ON` / `OFF` | The near-end sensor has tripped / has not. Some printers have no such sensor and always say `OFF`. |
+
+The printer is asked about paper every 60 seconds. When it does not answer, the last value stays.
 
 ---
 
@@ -187,19 +261,25 @@ mqtt:
       payload_not_available: "offline"
 ```
 
-Both carry `device_class: problem`, so "on" means something needs attention. The `availability_topic` means they show as unavailable rather than stale when the container is down.
+Both carry `device_class: problem`, so "on" means something needs attention. The `availability_topic` makes them show as unavailable, not stale, when the container is down or the printer's device node has disappeared (for example, the USB cable was pulled).
 
 ### Dropped and failed jobs
 
-Jobs the printer never printed are published, not just logged. Topics (all QoS 1, retained):
+Jobs the printer never printed are published, not just logged. Topics (all retained):
 
 | Topic | Payload |
 |---|---|
-| `printer/last_error` | JSON: `timestamp` (UTC ISO 8601), `kind` (`dropped` = queue full, `failed` = the job raised), `message`, `dropped_total`, `failed_total`. |
+| `printer/last_error` | JSON: `timestamp` (UTC ISO 8601), `kind` (`dropped` = queue full or too many jobs per minute, `failed` = the job raised or the message was refused), `message`, `dropped_total`, `failed_total`. |
 | `printer/dropped_total` | Integer, jobs dropped since the container started. |
-| `printer/failed_total` | Integer, jobs that failed since the container started. |
+| `printer/failed_total` | Integer, jobs that failed or were refused since the container started. |
 
-`last_error` is retained so Home Assistant still shows the most recent problem after a restart; it is only replaced by the next error. The counters are published as `0` on every connect, so they reset when the container restarts. `message` contains at most the first 40 characters of the job title and, for failures, a short error string; the message body is never published. Topic names can be changed with `MQTT_LAST_ERROR_TOPIC`, `MQTT_DROPPED_TOTAL_TOPIC` and `MQTT_FAILED_TOTAL_TOPIC`; the paper topics likewise via `MQTT_PAPER_TOPIC` and `MQTT_PAPER_LOW_TOPIC`. Publishing is fire-and-forget: a broker problem is logged and never blocks printing.
+`last_error` is retained, so Home Assistant still shows the most recent problem after a restart. The next error replaces it.
+
+- `message` holds at most the first 40 characters of the job title and, for failures, a short error text. The message body is never published.
+- The counters start at `0` when the container starts. They are published again, with their current values, each time the container reconnects to the broker.
+- A message that is not valid JSON, is not a JSON object, or has no `printer_name` is refused. It counts as `failed` and shows up in `last_error`.
+- You can rename the topics with `MQTT_LAST_ERROR_TOPIC`, `MQTT_DROPPED_TOTAL_TOPIC`, `MQTT_FAILED_TOTAL_TOPIC`, `MQTT_PAPER_TOPIC` and `MQTT_PAPER_LOW_TOPIC` (see [Settings](#settings)).
+- If the broker cannot be reached, the error is logged and printing carries on.
 
 ```yaml
 mqtt:
@@ -219,7 +299,7 @@ mqtt:
       state_class: total_increasing
 ```
 
-Merge these under your existing `mqtt:` key (do not repeat it); the project publishes no MQTT discovery, so sensors are defined by hand like the paper ones. An automation triggering on a rise in `sensor.receipt_printer_failed_jobs` or `..._dropped_jobs` can notify you.
+Merge these under your existing `mqtt:` key (do not repeat it). Home Assistant does not find these sensors on its own, so add them by hand like the paper ones. An automation that triggers when `sensor.receipt_printer_failed_jobs` or `sensor.receipt_printer_dropped_jobs` goes up can notify you.
 
 ### Printing a message
 
@@ -237,9 +317,14 @@ Merge these under your existing `mqtt:` key (do not repeat it); the project publ
         E-Shot!"}
 ```
 
-`title` prints bold above a divider, `message` below it, wrapped to the roll width. `printer_name` is required in the payload but doesn't choose a printer: every job goes to `PRINTER_DEVICE`. Keep it as `ReceiptPrinter`.
+`title` prints bold above a divider, `message` below it, wrapped to the roll width.
 
-Stick to plain ASCII in `message`. Em dashes and smart quotes are fine through the PDF path but not worth relying on.
+- `printer_name` must be in the payload but does not pick a printer. Every job goes to `PRINTER_DEVICE`. Use `ReceiptPrinter`.
+- Line breaks in `message` are kept. Runs of spaces and tabs become one space, so you cannot indent.
+- The title is one line. Line breaks in it become spaces.
+- Letters, numbers, accented Western letters, curly quotes and dashes print. Emoji and non-Latin scripts do not: they come out as placeholder marks.
+- Messages over 65,536 characters are cut.
+- Retained messages on the command topic are ignored. Publish with `retain: false`, as above.
 
 ### Notify when the paper runs out
 
@@ -338,7 +423,9 @@ actions:
       message: Receipt printer has been offline for 30 minutes.
 ```
 
-Worth having. A silently dead printer is easy to not notice for a very long time.
+The paper sensors go `unavailable` when the container is down or the printer's device node (for example `/dev/usb/lp1`) is gone. This automation cannot see a printer that is plugged in but jammed or switched off.
+
+---
 
 ---
 
@@ -350,6 +437,8 @@ This project wouldn't exist without the starting points these two gave it — hu
 - **[klirichek/zj-58](https://github.com/klirichek/zj-58)** — the ZJ-58/ZJ-80 CUPS driver that got these printers working in the first place. The driver itself is no longer used here, but [`app/escpos.py`](./app/escpos.py) is a Python port of its ESC/POS output logic. Licensed BSD-2-Clause, © Aleksey N. Vinogradov (klirichek); the notice is kept in [`LICENSE.zj-58`](./LICENSE.zj-58). Thank you for reverse-engineering these printers.
 
 If you find this useful, please go star both repositories above.
+
+---
 
 ---
 

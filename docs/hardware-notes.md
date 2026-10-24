@@ -1,4 +1,4 @@
-# Hardware notes (labelprinter)
+# Hardware notes
 
 Things that live outside this repo but that the container depends on.
 
@@ -156,8 +156,8 @@ A one-byte response is the status. Bits 5 and 6 both set (`& 0x60 == 0x60`)
 means out of paper; bits 2 and 3 both set (`& 0x0C == 0x0C`) means the
 near-end sensor has tripped, on units that have one.
 
-The query opens the device directly, so it returns EBUSY while CUPS holds
-it mid-job. That is treated as "unknown" and the last retained value stands.
+The query opens the device directly, so it returns EBUSY while a print job
+is being written. That is treated as "unknown" and the last retained value stands.
 
 ### Home Assistant
 

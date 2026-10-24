@@ -12,7 +12,9 @@ Cannot reach the panel:
 
 - Ensure the container is running: `docker logs printmqttify_container`.
 - The panel is protected with HTTP Basic auth; log in with your
-  `ADMIN_USER` / `ADMIN_PASS` values.
+  `ADMIN_USER` / `ADMIN_PASS` values. After 5 wrong passwords in a row the
+  panel answers "429 Too many wrong passwords" for a minute.
+- **Send Test Print** answers "wait Ns" if you press it twice within 10 seconds.
 - The container must not be started with `ADMIN_PASS` unset: the entrypoint
   refuses to start without a password.
 
@@ -20,7 +22,8 @@ Cannot reach the panel:
 
 - Check the handler log first: `docker logs printmqttify_container` should
   show `Wrote N ESC/POS bytes to /dev/usb/lpN.` for each job. If it shows
-  `Direct write ... failed` instead, the device is wrong or busy.
+  `Error printing job: ...` instead, the device is wrong or busy, and the
+  failure is also published to `printer/last_error`.
 - Verify the printer device matches the mapped USB device: the queue device
   (`docker exec printmqttify_container lpstat -v`) should show
   `file:/dev/usb/lpN`, and `PRINTER_DEVICE` on the container must match the
@@ -37,7 +40,10 @@ Cannot reach the panel:
 ## MQTT issues
 
 - Verify the MQTT broker details in the container environment variables.
-- Check the MQTT topic for incoming messages.
+- Check that your messages go to the topic the container listens on
+  (`MQTT_TOPIC`, default `printer/commands`). The panel home page shows it.
+- A line `Error decoding JSON` or `Missing 'printer_name'` means the message
+  was refused. It is also published to `printer/last_error`.
 - From a shell, publish a test message (see README) and watch
   `docker logs printmqttify_container` for `Received message` followed by
   `Printed N ESC/POS bytes.`
