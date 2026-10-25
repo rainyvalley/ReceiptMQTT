@@ -1,10 +1,11 @@
 # Base image
 # Alpine, not Debian. Debian's armhf port is compiled for ARMv7 (Thumb-2,
-# VFPv3-d16), so a trixie-slim image dies with SIGILL on the ARMv6 CPU in a
-# Pi Zero W. Alpine's armhf port targets ARMv6 (hard-float), so the same
-# Dockerfile serves amd64, arm64 and arm/v6 from one distro and one package
-# set. CUPS 2.4.x is in main; the queue is raw and the ESC/POS emission lives
-# in app/escpos.py, not in a CUPS filter, so the stack survives 2.5/3.x.
+# VFPv3-d16), so a trixie-slim image dies with SIGILL on an ARMv6 CPU.
+# Alpine's armhf port targets ARMv6 (hard-float), which ARMv7 also runs, so
+# the same Dockerfile serves amd64, arm64, arm/v6 and arm/v7 from one distro
+# and one package set. CUPS 2.4.x is in main; the queue is raw and the
+# ESC/POS emission lives in app/escpos.py, not in a CUPS filter, so the stack
+# survives 2.5/3.x.
 FROM alpine:3.22
 
 ENV APP_DIR=/app

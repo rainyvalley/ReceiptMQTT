@@ -121,11 +121,11 @@ jobs:
     # entrypoint disabled and scripts/container_device_check.py drives
     # send_raw_to_printer directly against a mounted device file.
     # This verifies the containerised Python runtime + app code + device
-    # writing - deliberately not a full MQTT (broker) round-trip. The
-    # arm/v6 leg runs the same check under QEMU so a broken 32-bit build
-    # cannot reach the registry (it runs on ARMv7 emulation, so it proves
-    # the image works, not that every instruction is ARMv6-safe - the
-    # Alpine armhf base is what makes it ARMv6).
+    # writing - deliberately not a full MQTT (broker) round-trip. The two
+    # 32-bit ARM legs run the same check under QEMU so a broken armv6/armv7
+    # build cannot reach the registry (they run on ARMv7 emulation, so they
+    # prove the images work, not that every instruction is ARMv6-safe - the
+    # Alpine armhf base is what makes the binaries ARMv6).
     needs: [lint, unit-tests, smoke-test]
     runs-on: ubuntu-latest
     permissions:
@@ -145,8 +145,14 @@ jobs:
       - name: Build amd64 image
         run: docker build -f dockerfile -t receiptmqtt:ci .
 
-      - name: Build arm/v6 image
-        run: docker buildx build --platform linux/arm/v6 -f dockerfile -t receiptmqtt:ci-armv6 --load .
+      - name: Build arm images
+        run: |
+          # Both 32-bit platforms come from the same Alpine armhf packages;
+          # the v7 tag exists so an ARMv7 host selects it directly.
+          for v in v6 v7; do
+            docker buildx build --platform "linux/arm/$v" -f dockerfile \
+              -t "receiptmqtt:ci-arm$v" --load .
+          done
 
       - name: Unit tests on the image's Python stack (arm/v6)
         run: |
@@ -179,6 +185,7 @@ jobs:
           }
           check receiptmqtt:ci linux/amd64 /tmp/receiptmqtt-device-amd64
           check receiptmqtt:ci-armv6 linux/arm/v6 /tmp/receiptmqtt-device-armv6
+          check receiptmqtt:ci-armv7 linux/arm/v7 /tmp/receiptmqtt-device-armv7
 
   build-and-push:
     needs: [container-check]
@@ -227,7 +234,7 @@ jobs:
         with:
           context: .
           file: ./dockerfile
-          platforms: linux/amd64,linux/arm64,linux/arm/v6
+          platforms: linux/amd64,linux/arm64,linux/arm/v6,linux/arm/v7
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

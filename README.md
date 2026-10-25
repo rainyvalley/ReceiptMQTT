@@ -21,7 +21,7 @@ What it does not do yet:
 
 ## Install
 
-You need Docker and an MQTT broker (for example Mosquitto). The image is published for 64-bit x86 (`linux/amd64`), 64-bit ARM (`linux/arm64`) and 32-bit ARMv6 (`linux/arm/v6`). ARMv6 is what a Pi Zero W and Pi 1 have; newer Pis running a 32-bit Raspberry Pi OS use the same ARMv6 image, and 64-bit Raspberry Pi OS uses the arm64 one. All of them come from one Alpine base, so there is no separate ARM image to look after. Find your printer's device with `lsusb` and `dmesg | grep usb`. It is usually `/dev/usb/lp0` or `/dev/usb/lp1`. If you have two USB printers, the numbers can swap after a reboot. See [`docs/hardware-notes.md`](./docs/hardware-notes.md).
+You need Docker and an MQTT broker (for example Mosquitto). The image is published for 64-bit x86 (`linux/amd64`), 64-bit ARM (`linux/arm64`), 32-bit ARMv6 (`linux/arm/v6`) and 32-bit ARMv7 (`linux/arm/v7`), all from one Alpine base, so there is no separate ARM image to look after. Find your printer's device with `lsusb` and `dmesg | grep usb`. It is usually `/dev/usb/lp0` or `/dev/usb/lp1`. If you have two USB printers, the numbers can swap after a reboot. See [`docs/hardware-notes.md`](./docs/hardware-notes.md).
 
 **1. Get the files.**
 
@@ -33,7 +33,7 @@ cd ReceiptMQTT
 **2. Pick an image.**
 
 - **Prebuilt (recommended).** `docker-compose.yml` already points at `ghcr.io/rainyvalley/receiptmqtt:latest`. Compose pulls the right architecture for your host on the first start. Other tags: `beta` (test builds) and `sha-<commit>`.
-- **Build it yourself.** Run `docker build -t ghcr.io/rainyvalley/receiptmqtt:local .` in the repo, then put `IMAGE_TAG=local` in your `.env` so Compose uses that local image. The build works on every supported architecture, including a Pi Zero W, where it takes a while on one 1 GHz core.
+- **Build it yourself.** Run `docker build -t ghcr.io/rainyvalley/receiptmqtt:local .` in the repo, then put `IMAGE_TAG=local` in your `.env` so Compose uses that local image. The build works on every supported architecture; on a 32-bit single-board computer it takes a while.
 
 **3. Create `.env`** next to `docker-compose.yml`. **`MQTT_PASSWORD` and `ADMIN_PASS` are required.** Compose will not start without them.
 
@@ -48,7 +48,7 @@ PRINTER_DEVICE=/dev/usb/lp0     # your printer (default /dev/usb/lp1)
 
 Every other setting is in [Settings](#settings).
 
-On a Pi Zero W (426 MB RAM) give the container a lower ceiling than the default 512 MB, so the host's OOM killer does not have to choose between the container and the rest of the system:
+On a board with 512 MB of RAM or less, give the container a lower ceiling than the default 512 MB, so the host's OOM killer does not have to choose between the container and the rest of the system:
 
 ```bash
 MEM_LIMIT=384m                   # in .env
@@ -159,7 +159,7 @@ A number that is not a whole number, or is too small, is ignored and the default
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `MEM_LIMIT` | `512m` | Memory ceiling for the container. Lower it to `384m` on a Pi Zero W, which has 426 MB in total. |
+| `MEM_LIMIT` | `512m` | Memory ceiling for the container. Lower it to `384m` on a board with 512 MB of RAM or less. |
 
 ### How jobs are handled
 
@@ -283,7 +283,7 @@ sudo systemctl restart mosquitto
 
 Home Assistant then needs one MQTT device per printer, with each prefix in its entity topics. See [Home Assistant](#home-assistant).
 
-**Memory.** Two containers on a Pi Zero W (426 MB in total) is too much. Run one printer per Pi Zero W, or put both on a Pi 3/4/5 or an x86 host.
+**Memory.** Two containers need at least 1 GB of RAM. On a board with 512 MB, run one printer per board.
 
 ---
 
