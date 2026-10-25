@@ -42,6 +42,7 @@ services:
       - MQTT_USERNAME=${MQTT_USERNAME:-your-username}
       - MQTT_PASSWORD=${MQTT_PASSWORD:? .env must set MQTT_PASSWORD}
       - MQTT_TOPIC=${MQTT_TOPIC:-printer/commands}
+      - MQTT_AVAILABILITY_TOPIC=${MQTT_AVAILABILITY_TOPIC:-printer/availability}
       - MQTT_PAPER_TOPIC=${MQTT_PAPER_TOPIC:-printer/paper}
       - MQTT_PAPER_LOW_TOPIC=${MQTT_PAPER_LOW_TOPIC:-printer/paper_low}
       - MQTT_LAST_ERROR_TOPIC=${MQTT_LAST_ERROR_TOPIC:-printer/last_error}

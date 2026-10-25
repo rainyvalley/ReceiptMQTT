@@ -63,7 +63,8 @@ broker = os.getenv("MQTT_BROKER") or "localhost"
 username = os.getenv("MQTT_USERNAME")
 password = os.getenv("MQTT_PASSWORD")
 topic = os.getenv("MQTT_TOPIC") or "printer/commands"
-availability_topic = "printer/availability"
+availability_topic = (os.getenv("MQTT_AVAILABILITY_TOPIC")
+                     or "printer/availability")
 last_error_topic = os.getenv("MQTT_LAST_ERROR_TOPIC") or "printer/last_error"
 dropped_total_topic = os.getenv("MQTT_DROPPED_TOTAL_TOPIC") or "printer/dropped_total"
 failed_total_topic = os.getenv("MQTT_FAILED_TOTAL_TOPIC") or "printer/failed_total"

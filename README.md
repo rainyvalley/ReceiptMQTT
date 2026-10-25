@@ -115,10 +115,9 @@ Set these in `.env`. Compose passes them on. A setting that is missing or empty 
 | `MQTT_TLS_CA` | system CAs | Path inside the container to a CA file, for a private CA. Mount it read-only. |
 | `MQTT_TLS_INSECURE` | off | Skip the broker name check. Lab use only. A warning is logged. |
 | `MQTT_TOPIC` | `printer/commands` | Topic that print jobs arrive on. |
+| `MQTT_AVAILABILITY_TOPIC` | `printer/availability` | Online/offline topic. Give each printer on one broker its own, see [Two printers on one machine](#two-printers-on-one-machine). |
 | `MQTT_PAPER_TOPIC`, `MQTT_PAPER_LOW_TOPIC` | `printer/paper`, `printer/paper_low` | Paper sensor topics. |
 | `MQTT_LAST_ERROR_TOPIC`, `MQTT_DROPPED_TOTAL_TOPIC`, `MQTT_FAILED_TOTAL_TOPIC` | `printer/last_error`, `printer/dropped_total`, `printer/failed_total` | Topics for [dropped and failed jobs](#dropped-and-failed-jobs). |
-
-The availability topic is always `printer/availability`.
 
 **Printer and paper**
 
@@ -193,6 +192,98 @@ By default a receipt is at most 480 dot lines, about 60 mm. That is the title, t
 `Receipt raster needs N lines; capped to RASTER_HEIGHT_PX=480, lower text is cut`
 
 To print longer receipts, raise `RASTER_HEIGHT_PX` in `.env` (for example `1600` for about 200 mm), then run `docker compose up -d` again. Nothing is published to MQTT when a receipt is cut. Only the log shows it.
+
+---
+
+## Two printers on one machine
+
+Run one container per printer. Nothing in the app is shared: each container has its own CUPS, its own web panel and its own memory limit. What must differ is the device file, the panel port and every MQTT topic, or the two printers overwrite each other's retained messages.
+
+**Devices.** Two USB printers appear as `/dev/usb/lp0` and `/dev/usb/lp1`, and those numbers can swap on a reboot or a replug. Point each container at a udev symlink (for example `/dev/printer_kitchen`) instead of a number, or check the numbers after every reboot.
+
+**Compose.** Put both services in one file. Only the values that differ are listed; copy the capabilities, ulimits and restart policy from this repo's `docker-compose.yml`.
+
+```yaml
+services:
+  kitchen:
+    image: ghcr.io/rainyvalley/receiptmqtt:${IMAGE_TAG:-latest}
+    container_name: printmqttify_kitchen
+    ports: ["8080:8080"]
+    devices: ["/dev/printer_kitchen:/dev/printer_kitchen"]
+    environment:
+      PRINTER_DEVICE: /dev/printer_kitchen
+      PRINTER_NAME: Kitchen
+      MQTT_BROKER: 192.0.2.10
+      MQTT_USERNAME: kitchen
+      MQTT_PASSWORD: kitchen-broker-password
+      MQTT_TOPIC: kitchen/commands
+      MQTT_AVAILABILITY_TOPIC: kitchen/availability
+      MQTT_PAPER_TOPIC: kitchen/paper
+      MQTT_PAPER_LOW_TOPIC: kitchen/paper_low
+      MQTT_LAST_ERROR_TOPIC: kitchen/last_error
+      MQTT_DROPPED_TOTAL_TOPIC: kitchen/dropped_total
+      MQTT_FAILED_TOTAL_TOPIC: kitchen/failed_total
+      ADMIN_PASS: kitchen-panel-password
+    mem_limit: 384m
+
+  office:
+    image: ghcr.io/rainyvalley/receiptmqtt:${IMAGE_TAG:-latest}
+    container_name: printmqttify_office
+    ports: ["8081:8080"]
+    devices: ["/dev/printer_office:/dev/printer_office"]
+    environment:
+      PRINTER_DEVICE: /dev/printer_office
+      PRINTER_NAME: Office
+      MQTT_BROKER: 192.0.2.10
+      MQTT_USERNAME: office
+      MQTT_PASSWORD: office-broker-password
+      MQTT_TOPIC: office/commands
+      MQTT_AVAILABILITY_TOPIC: office/availability
+      MQTT_PAPER_TOPIC: office/paper
+      MQTT_PAPER_LOW_TOPIC: office/paper_low
+      MQTT_LAST_ERROR_TOPIC: office/last_error
+      MQTT_DROPPED_TOTAL_TOPIC: office/dropped_total
+      MQTT_FAILED_TOTAL_TOPIC: office/failed_total
+      ADMIN_PASS: office-panel-password
+    mem_limit: 384m
+```
+
+Then `docker compose up -d` starts both. The kitchen panel is on `http://<host>:8080`, the office panel on `http://<host>:8081`.
+
+**Broker logins and ACL.** Give each container its own broker login instead of one shared account. Mosquitto can then keep each login inside its own topic prefix, so a mistake on one printer cannot print on, or silence, the other.
+
+`/etc/mosquitto/conf.d/printers.conf`:
+
+```conf
+allow_anonymous false
+password_file /etc/mosquitto/passwd
+acl_file /etc/mosquitto/acl
+```
+
+`/etc/mosquitto/acl`:
+
+```conf
+# %u is the login name: kitchen may only use kitchen/#, office only office/#
+pattern readwrite %u/#
+
+# Home Assistant reads every printer and may publish print jobs only
+user hass
+topic read #
+topic write +/commands
+```
+
+Create the three logins and restart the broker:
+
+```bash
+sudo mosquitto_passwd -c /etc/mosquitto/passwd kitchen
+sudo mosquitto_passwd /etc/mosquitto/passwd office
+sudo mosquitto_passwd /etc/mosquitto/passwd hass
+sudo systemctl restart mosquitto
+```
+
+Home Assistant then needs one MQTT device per printer, with each prefix in its entity topics. See [Home Assistant](#home-assistant).
+
+**Memory.** Two containers on a Pi Zero W (426 MB in total) is too much. Run one printer per Pi Zero W, or put both on a Pi 3/4/5 or an x86 host.
 
 ---
 

@@ -669,14 +669,28 @@ class TestEnvRobustness:
     def test_empty_topic_env_uses_default(self, monkeypatch):
         import importlib
         monkeypatch.setenv("MQTT_TOPIC", "")
+        monkeypatch.setenv("MQTT_AVAILABILITY_TOPIC", "")
         monkeypatch.setenv("RASTER_DPI_X", "junk")
         monkeypatch.setenv("PRINTER_DEVICE", "")
         monkeypatch.setenv("PAPER_DEVICE", "/dev/usb/lp7")
         try:
             m = importlib.reload(h)
             assert m.topic == "printer/commands"
+            assert m.availability_topic == "printer/availability"
             assert m.RASTER_DPI_X == 203
             assert m.printer_device == "/dev/usb/lp7"
+        finally:
+            monkeypatch.undo()
+            importlib.reload(h)
+
+    def test_availability_topic_is_configurable(self, monkeypatch):
+        # A second printer on the same broker needs its own retained
+        # availability topic, or the two instances overwrite each other.
+        import importlib
+        monkeypatch.setenv("MQTT_AVAILABILITY_TOPIC", "kitchen/availability")
+        try:
+            m = importlib.reload(h)
+            assert m.availability_topic == "kitchen/availability"
         finally:
             monkeypatch.undo()
             importlib.reload(h)
