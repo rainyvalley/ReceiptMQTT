@@ -956,3 +956,20 @@ class TestSettingsReload:
                        if t.endswith("/last_error/config"))
         assert payload["value_template"] == "{{ value_json.kind }}"
         assert payload["json_attributes_topic"] == h.last_error_topic
+
+    def test_one_prefix_changes_every_topic(self, monkeypatch):
+        import importlib
+        monkeypatch.setattr(h.settings_store, "SETTINGS_FILE", "/nonexistent/settings.json")
+        for key in ("MQTT_TOPIC_PREFIX", "MQTT_TOPIC", "MQTT_PAPER_TOPIC"):
+            monkeypatch.delenv(key, raising=False)
+        try:
+            changed = h.apply_runtime_settings(
+                env={"MQTT_TOPIC_PREFIX": "receiptprinter2"})
+            assert "MQTT_TOPIC" in changed and "MQTT_PAPER_TOPIC" in changed
+            assert h.topic == "receiptprinter2/commands"
+            assert h.availability_topic == "receiptprinter2/availability"
+            assert h.paper_topic == "receiptprinter2/paper"
+            assert h.discovery_node() == "receiptprinter2_commands"
+        finally:
+            monkeypatch.undo()
+            importlib.reload(h)

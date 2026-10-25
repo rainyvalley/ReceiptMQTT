@@ -46,40 +46,12 @@
         </p>
         <h3>MQTT topics</h3>
         <p>
-            <label for="MQTT_TOPIC">Print jobs</label>
-            <input id="MQTT_TOPIC" name="MQTT_TOPIC" size="28">
-            <span class="locked-note" data-key="MQTT_TOPIC"></span>
+            <label for="MQTT_TOPIC_PREFIX">Topic prefix</label>
+            <input id="MQTT_TOPIC_PREFIX" name="MQTT_TOPIC_PREFIX" size="28">
+            <span class="locked-note" data-key="MQTT_TOPIC_PREFIX"></span>
         </p>
-        <p>
-            <label for="MQTT_AVAILABILITY_TOPIC">Availability</label>
-            <input id="MQTT_AVAILABILITY_TOPIC" name="MQTT_AVAILABILITY_TOPIC" size="28">
-            <span class="locked-note" data-key="MQTT_AVAILABILITY_TOPIC"></span>
-        </p>
-        <p>
-            <label for="MQTT_PAPER_TOPIC">Paper</label>
-            <input id="MQTT_PAPER_TOPIC" name="MQTT_PAPER_TOPIC" size="28">
-            <span class="locked-note" data-key="MQTT_PAPER_TOPIC"></span>
-        </p>
-        <p>
-            <label for="MQTT_PAPER_LOW_TOPIC">Paper low</label>
-            <input id="MQTT_PAPER_LOW_TOPIC" name="MQTT_PAPER_LOW_TOPIC" size="28">
-            <span class="locked-note" data-key="MQTT_PAPER_LOW_TOPIC"></span>
-        </p>
-        <p>
-            <label for="MQTT_LAST_ERROR_TOPIC">Last error</label>
-            <input id="MQTT_LAST_ERROR_TOPIC" name="MQTT_LAST_ERROR_TOPIC" size="28">
-            <span class="locked-note" data-key="MQTT_LAST_ERROR_TOPIC"></span>
-        </p>
-        <p>
-            <label for="MQTT_DROPPED_TOTAL_TOPIC">Dropped total</label>
-            <input id="MQTT_DROPPED_TOTAL_TOPIC" name="MQTT_DROPPED_TOTAL_TOPIC" size="28">
-            <span class="locked-note" data-key="MQTT_DROPPED_TOTAL_TOPIC"></span>
-        </p>
-        <p>
-            <label for="MQTT_FAILED_TOTAL_TOPIC">Failed total</label>
-            <input id="MQTT_FAILED_TOTAL_TOPIC" name="MQTT_FAILED_TOTAL_TOPIC" size="28">
-            <span class="locked-note" data-key="MQTT_FAILED_TOTAL_TOPIC"></span>
-        </p>
+        <p>Topics: <code id="topics-list"></code></p>
+        <p id="topic-overrides" class="locked-note"></p>
         <button type="submit">Save settings</button>
     </form>
     <pre id="settings-output"></pre>
@@ -104,10 +76,7 @@
     <script>
         const SETTING_KEYS = ['PAPER_WIDTH_MM', 'PRINTER_DEVICE', 'MQTT_BROKER',
                               'MQTT_USERNAME', 'MQTT_PASSWORD',
-                              'MQTT_TOPIC', 'MQTT_AVAILABILITY_TOPIC',
-                              'MQTT_PAPER_TOPIC', 'MQTT_PAPER_LOW_TOPIC',
-                              'MQTT_LAST_ERROR_TOPIC', 'MQTT_DROPPED_TOTAL_TOPIC',
-                              'MQTT_FAILED_TOTAL_TOPIC'];
+                              'MQTT_TOPIC_PREFIX'];
 
         async function loadSettings() {
             const output = document.getElementById('settings-output');
@@ -127,6 +96,16 @@
                     const note = document.querySelector(
                         '.locked-note[data-key="' + key + '"]');
                     if (note) note.textContent = locked ? 'set in the environment' : '';
+                }
+                const topics = document.getElementById('topics-list');
+                if (data.topics) {
+                    topics.textContent = Object.values(data.topics).join(', ');
+                }
+                const overrides = document.getElementById('topic-overrides');
+                if (overrides) {
+                    overrides.textContent = (data.topic_overrides || []).length
+                        ? 'Set in the environment: ' + data.topic_overrides.join(', ')
+                        : '';
                 }
                 const discovery = document.getElementById('discovery-line');
                 if (data.discovery && data.discovery.enabled) {

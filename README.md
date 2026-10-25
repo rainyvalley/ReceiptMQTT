@@ -105,7 +105,7 @@ Put the settings in `.env` as above, not on the command line, so they stay out o
 
 Set these in `.env`. Compose passes them on. A setting that is missing or empty uses its default.
 
-Paper width, the printer device, the broker login and every MQTT topic can also be changed from the web panel, without restarting. Environment variables always win: a variable set in `.env` or Compose is shown read-only in the panel. See [Settings in the panel](#settings-in-the-panel).
+Paper width, the printer device, the broker login and the MQTT topic prefix can also be changed from the web panel, without restarting. Environment variables always win: a variable set in `.env` or Compose is shown read-only in the panel. See [Settings in the panel](#settings-in-the-panel).
 
 **Broker**
 
@@ -117,10 +117,13 @@ Paper width, the printer device, the broker login and every MQTT topic can also 
 | `MQTT_TLS` | off | `1` turns on TLS to the broker, using the system CA list. |
 | `MQTT_TLS_CA` | system CAs | Path inside the container to a CA file, for a private CA. Mount it read-only. |
 | `MQTT_TLS_INSECURE` | off | Skip the broker name check. Lab use only. A warning is logged. |
-| `MQTT_TOPIC` | `printer/commands` | Topic that print jobs arrive on. |
-| `MQTT_AVAILABILITY_TOPIC` | `printer/availability` | Online/offline topic. Give each printer on one broker its own, see [Two printers on two systems](#two-printers-on-two-systems). |
-| `MQTT_PAPER_TOPIC`, `MQTT_PAPER_LOW_TOPIC` | `printer/paper`, `printer/paper_low` | Paper sensor topics. |
-| `MQTT_LAST_ERROR_TOPIC`, `MQTT_DROPPED_TOTAL_TOPIC`, `MQTT_FAILED_TOTAL_TOPIC` | `printer/last_error`, `printer/dropped_total`, `printer/failed_total` | Topics for [dropped and failed jobs](#dropped-and-failed-jobs). |
+| `MQTT_TOPIC_PREFIX` | `printer` | One setting for every topic: it builds `<prefix>/commands`, `<prefix>/availability`, `<prefix>/paper`, `<prefix>/paper_low`, `<prefix>/last_error`, `<prefix>/dropped_total` and `<prefix>/failed_total`. Change it per printer when two share a broker, see [Two printers on two systems](#two-printers-on-two-systems). |
+| `MQTT_TOPIC` | `<prefix>/commands` | Topic that print jobs arrive on. Overrides the prefix for this topic only. |
+| `MQTT_AVAILABILITY_TOPIC` | `<prefix>/availability` | Online/offline topic. Overrides the prefix for this topic only. |
+| `MQTT_PAPER_TOPIC`, `MQTT_PAPER_LOW_TOPIC` | `<prefix>/paper`, `<prefix>/paper_low` | Paper sensor topics. Override the prefix for these topics only. |
+| `MQTT_LAST_ERROR_TOPIC`, `MQTT_DROPPED_TOTAL_TOPIC`, `MQTT_FAILED_TOTAL_TOPIC` | `<prefix>/last_error`, `<prefix>/dropped_total`, `<prefix>/failed_total` | Topics for [dropped and failed jobs](#dropped-and-failed-jobs). Override the prefix for these topics only. |
+
+Most installs only set `MQTT_TOPIC_PREFIX`. The single-topic variables are there for a broker that needs an unusual layout; leave them empty otherwise.
 
 **Printer and paper**
 
@@ -179,9 +182,9 @@ The panel can change these values, so a plain `docker run` install does not need
 
 - paper width, printer device
 - MQTT broker, username and password
-- every MQTT topic: commands, availability, paper, paper low, last error, dropped total, failed total
+- the MQTT topic prefix, which builds all seven topics
 
-Paper width and the device take effect on the next print. A broker, login or topic change reconnects within a couple of seconds; the log says `Settings changed: ...`. Home Assistant discovery is republished on that reconnect. If your broker ACL names the discovery prefix, remember that changing the command topic changes it too, unless `HA_NODE_ID` is set.
+Paper width and the device take effect on the next print. A broker, login or topic change reconnects within a couple of seconds; the log says `Settings changed: ...`. Home Assistant discovery is republished on that reconnect. If your broker ACL names the discovery prefix, remember that changing the topic prefix changes it too, unless `HA_NODE_ID` is set.
 
 Values are stored in `/app/data/settings.json` inside the container. `docker-compose.yml` mounts a named volume there, so they survive `docker compose up -d` and `docker compose down`; `docker compose down -v` removes them. Without Compose, mount a directory at `/app/data` yourself.
 
@@ -246,13 +249,7 @@ other's jobs and overwrite each other's retained state.
 MQTT_BROKER=192.0.2.10
 MQTT_USERNAME=printer_one
 MQTT_PASSWORD=broker-password-one
-MQTT_TOPIC=printer_one/commands
-MQTT_AVAILABILITY_TOPIC=printer_one/availability
-MQTT_PAPER_TOPIC=printer_one/paper
-MQTT_PAPER_LOW_TOPIC=printer_one/paper_low
-MQTT_LAST_ERROR_TOPIC=printer_one/last_error
-MQTT_DROPPED_TOTAL_TOPIC=printer_one/dropped_total
-MQTT_FAILED_TOTAL_TOPIC=printer_one/failed_total
+MQTT_TOPIC_PREFIX=printer_one
 PRINTER_DEVICE=/dev/usb/lp0
 PRINTER_NAME=ReceiptPrinter
 HA_DEVICE_NAME=Printer one
@@ -329,7 +326,7 @@ A publish the ACL denies is dropped without an error, and current Mosquitto buil
 
 Home Assistant fixes the shape of a discovery topic: it must be `<prefix>/<component>/[<node>/]<entity>/config`. A printer cannot get a flatter or separately named subtree under `homeassistant`, so a topic change would not remove that shape; the only choice is what the node segment is called and how the ACL matches it.
 
-The node follows `MQTT_TOPIC`, so changing that topic from the panel changes the ACL line it needs. Either update the ACL, or set `HA_NODE_ID` to a fixed value such as `printer_one_commands` and write `homeassistant/+/receiptmqtt_printer_one_commands/+/config` in the ACL; then topic changes never touch the ACL again.
+The node follows the command topic, so changing the topic prefix from the panel changes the ACL line it needs. Either update the ACL, or set `HA_NODE_ID` to a fixed value such as `printer_one_commands` and write `homeassistant/+/receiptmqtt_printer_one_commands/+/config` in the ACL; then prefix changes never touch the ACL again.
 
 A longer walkthrough, with the topic names, both ACL options and the checks, is in [`docs/mqtt-broker-acls.md`](./docs/mqtt-broker-acls.md).
 
@@ -444,7 +441,7 @@ The container publishes retained Home Assistant discovery configs on every MQTT 
 
 Entity ids are derived from the command topic (`printer/commands` becomes `receiptmqtt_printer_commands_*`), so two printers with different topics on one broker do not collide. Set `HA_DEVICE_NAME` per instance to give them distinct names in Home Assistant, and `HA_NODE_ID` if you want the prefix fixed (see the ACL note under [Two printers on two systems](#two-printers-on-two-systems)). `HA_DISCOVERY=0` turns discovery off; the topics keep working and you can add the entities by hand (see [Entity ids](#entity-ids)).
 
-Renaming topics in the panel creates a new entity prefix on the next reconnect and clears the old retained availability and discovery configs, so Home Assistant does not keep showing the old entities.
+Changing the topic prefix in the panel moves the entity prefix on the next reconnect and clears the old retained availability and discovery configs, so Home Assistant does not keep showing the old entities.
 
 The startup log and the panel's settings page print the exact broker ACL line for the current prefix, for example `topic write homeassistant/+/receiptmqtt_printer_commands/+/config`.
 

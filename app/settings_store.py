@@ -17,19 +17,30 @@ import tempfile
 SETTINGS_FILE = os.getenv("SETTINGS_FILE") or "/app/data/settings.json"
 
 KEYS = ("PAPER_WIDTH_MM", "MQTT_BROKER", "MQTT_USERNAME", "MQTT_PASSWORD",
-        "MQTT_TOPIC", "MQTT_AVAILABILITY_TOPIC", "MQTT_PAPER_TOPIC",
-        "MQTT_PAPER_LOW_TOPIC", "MQTT_LAST_ERROR_TOPIC",
-        "MQTT_DROPPED_TOTAL_TOPIC", "MQTT_FAILED_TOTAL_TOPIC",
-        "PRINTER_DEVICE")
+        "MQTT_TOPIC_PREFIX", "MQTT_TOPIC", "MQTT_AVAILABILITY_TOPIC",
+        "MQTT_PAPER_TOPIC", "MQTT_PAPER_LOW_TOPIC",
+        "MQTT_LAST_ERROR_TOPIC", "MQTT_DROPPED_TOTAL_TOPIC",
+        "MQTT_FAILED_TOTAL_TOPIC", "PRINTER_DEVICE")
 
-TOPIC_KEYS = ("MQTT_TOPIC", "MQTT_AVAILABILITY_TOPIC", "MQTT_PAPER_TOPIC",
-              "MQTT_PAPER_LOW_TOPIC", "MQTT_LAST_ERROR_TOPIC",
-              "MQTT_DROPPED_TOTAL_TOPIC", "MQTT_FAILED_TOTAL_TOPIC")
+# One prefix owns all the topics. Changing it per printer is what keeps two
+# devices on one broker apart.
+TOPIC_SUFFIXES = {
+    "MQTT_TOPIC": "commands",
+    "MQTT_AVAILABILITY_TOPIC": "availability",
+    "MQTT_PAPER_TOPIC": "paper",
+    "MQTT_PAPER_LOW_TOPIC": "paper_low",
+    "MQTT_LAST_ERROR_TOPIC": "last_error",
+    "MQTT_DROPPED_TOTAL_TOPIC": "dropped_total",
+    "MQTT_FAILED_TOTAL_TOPIC": "failed_total",
+}
+
+TOPIC_KEYS = tuple(TOPIC_SUFFIXES)
 
 # Used when neither the environment nor the panel provides a value. The panel
 # starts from these, so its form shows what the app would do anyway.
 DEFAULTS = {
     "PAPER_WIDTH_MM": "48",
+    "MQTT_TOPIC_PREFIX": "printer",
     "MQTT_BROKER": "localhost",
     "MQTT_USERNAME": "",
     "MQTT_PASSWORD": "",
@@ -51,6 +62,7 @@ MAX_LENGTHS = {
     "MQTT_USERNAME": 256,
     "MQTT_PASSWORD": 1024,
     "PRINTER_DEVICE": 4096,
+    "MQTT_TOPIC_PREFIX": 65535,
     "MQTT_TOPIC": 65535,
     "MQTT_AVAILABILITY_TOPIC": 65535,
     "MQTT_PAPER_TOPIC": 65535,
@@ -95,12 +107,34 @@ def stored(path=None):
 
 
 def effective(env=None, path=None):
-    """Final values: environment override, else panel value, else default."""
+    """Final values: environment override, else panel value, else default.
+
+    All topics are built from `MQTT_TOPIC_PREFIX` (`<prefix>/commands`,
+    `<prefix>/availability`, ...). A per-topic environment variable still
+    wins, and per-topic values saved before the prefix existed are honoured
+    until a prefix is saved or set.
+    """
     saved = stored(path)
-    return {key: (env_value(key, env)
-                  if env_value(key, env) is not None
-                  else saved.get(key, DEFAULTS[key]))
-            for key in KEYS}
+    env_prefix = env_value("MQTT_TOPIC_PREFIX", env)
+    stored_prefix = saved.get("MQTT_TOPIC_PREFIX")
+    prefix = (env_prefix or stored_prefix or DEFAULTS["MQTT_TOPIC_PREFIX"])
+    # A prefix (from env or panel) replaces older per-topic panel values.
+    saved_topics = {} if (env_prefix or stored_prefix) else saved
+
+    values = {"MQTT_TOPIC_PREFIX": prefix}
+    for key in KEYS:
+        if key == "MQTT_TOPIC_PREFIX":
+            continue
+        override = env_value(key, env)
+        if override is None and key in TOPIC_SUFFIXES:
+            override = saved_topics.get(key)
+        if override is not None:
+            values[key] = override
+        elif key in TOPIC_SUFFIXES:
+            values[key] = f"{prefix}/{TOPIC_SUFFIXES[key]}"
+        else:
+            values[key] = saved_topics.get(key, DEFAULTS[key])
+    return values
 
 
 def validate(values):
@@ -126,6 +160,13 @@ def validate(values):
         elif key == "MQTT_BROKER":
             if not value or any(ch.isspace() for ch in value):
                 errors.append("MQTT_BROKER must be a hostname or address")
+                continue
+        elif key == "MQTT_TOPIC_PREFIX":
+            value = value.rstrip("/")
+            if (not value or value.startswith(("/", "$"))
+                    or any(ch in "#+" for ch in value)
+                    or any(ch.isspace() for ch in value)):
+                errors.append("MQTT_TOPIC_PREFIX must be a plain topic prefix")
                 continue
         elif key in TOPIC_KEYS:
             # These are publish topics, so wildcards are not valid, and a
@@ -173,6 +214,10 @@ def update(values, env=None, path=None):
     if errors:
         return {"saved": False, "errors": errors, "ignored_locked": ignored}
     merged = stored(path)
+    if "MQTT_TOPIC_PREFIX" in clean:
+        # The prefix now owns every topic; drop older per-topic panel values.
+        for key in TOPIC_KEYS:
+            merged.pop(key, None)
     merged.update(clean)
     save(merged, path)
     return {"saved": True, "errors": [], "ignored_locked": ignored}

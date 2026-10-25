@@ -9,7 +9,9 @@ Names like `printer_one`, `ha` and `<password>` are examples. Use your own.
 
 ## What each printer uses
 
-For a printer whose command topic is `printer_one/commands`:
+All topics come from one prefix (`MQTT_TOPIC_PREFIX`, default `printer`).
+For a printer set to `printer_one`, the command topic is
+`printer_one/commands`:
 
 | Topic | Direction | Purpose |
 |---|---|---|
@@ -142,10 +144,10 @@ Do not publish valid JSON to a `homeassistant/.../config` topic unless you
 want Home Assistant to create an entity from it. Use a non-JSON payload for
 probes, and do not retain it.
 
-## When a topic changes
+## When the topic prefix changes
 
-The panel can change `MQTT_TOPIC`. The discovery paths and the ACL line follow
-it. Either update the ACL, or set `HA_NODE_ID` first (for example
+The panel can change `MQTT_TOPIC_PREFIX`. The discovery paths and the ACL
+line follow it. Either update the ACL, or set `HA_NODE_ID` first (for example
 `HA_NODE_ID=printer_one_commands`), so the paths and ACL stay as they are.
 
 Reload the broker after ACL changes, for example `pkill -HUP mosquitto` or

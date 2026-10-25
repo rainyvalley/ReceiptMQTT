@@ -16,8 +16,8 @@ proxy with TLS in front of it, or keep it on localhost. Repeated wrong
 passwords from one address are locked out for a while, and /test-print has a
 cooldown.
 
-The settings form stores paper width, printer device, broker login and all
-MQTT topics in one JSON file. Environment variables set in Compose/.env still
+The settings form stores paper width, printer device, broker login and the
+MQTT topic prefix in one JSON file. Environment variables set in Compose/.env still
 win and are shown read-only, so the form only replaces editing `.env` for
 values that are not set there.
 
@@ -343,8 +343,13 @@ def get_settings():
     """Current values, environment locks, and the discovery ACL hint."""
     config = apply_local_settings()
     node = f"receiptmqtt_{handler.discovery_node(config['MQTT_TOPIC'])}"
+    locked = settings_store.locked()
     return jsonify({"settings": config,
-                    "locked": settings_store.locked(),
+                    "locked": locked,
+                    "topics": {key: config[key]
+                               for key in settings_store.TOPIC_KEYS},
+                    "topic_overrides": sorted(
+                        key for key in settings_store.TOPIC_KEYS if locked[key]),
                     "file": settings_store.SETTINGS_FILE,
                     "paper_width_mm": escpos.PAPER_WIDTH_MM,
                     "print_area_mm": escpos.PRINT_AREA_MM,

@@ -45,13 +45,17 @@ services:
       - MQTT_TLS_INSECURE=${MQTT_TLS_INSECURE:-}
       - MQTT_USERNAME=${MQTT_USERNAME:-your-username}
       - MQTT_PASSWORD=${MQTT_PASSWORD:? .env must set MQTT_PASSWORD}
-      - MQTT_TOPIC=${MQTT_TOPIC:-printer/commands}
-      - MQTT_AVAILABILITY_TOPIC=${MQTT_AVAILABILITY_TOPIC:-printer/availability}
-      - MQTT_PAPER_TOPIC=${MQTT_PAPER_TOPIC:-printer/paper}
-      - MQTT_PAPER_LOW_TOPIC=${MQTT_PAPER_LOW_TOPIC:-printer/paper_low}
-      - MQTT_LAST_ERROR_TOPIC=${MQTT_LAST_ERROR_TOPIC:-printer/last_error}
-      - MQTT_DROPPED_TOTAL_TOPIC=${MQTT_DROPPED_TOTAL_TOPIC:-printer/dropped_total}
-      - MQTT_FAILED_TOTAL_TOPIC=${MQTT_FAILED_TOTAL_TOPIC:-printer/failed_total}
+      # One prefix builds every topic (<prefix>/commands, ...). Set it in
+      # .env or the panel to keep two printers apart. The per-topic variables
+      # below are advanced overrides; leave them empty.
+      - MQTT_TOPIC_PREFIX=${MQTT_TOPIC_PREFIX:-}
+      - MQTT_TOPIC=${MQTT_TOPIC:-}
+      - MQTT_AVAILABILITY_TOPIC=${MQTT_AVAILABILITY_TOPIC:-}
+      - MQTT_PAPER_TOPIC=${MQTT_PAPER_TOPIC:-}
+      - MQTT_PAPER_LOW_TOPIC=${MQTT_PAPER_LOW_TOPIC:-}
+      - MQTT_LAST_ERROR_TOPIC=${MQTT_LAST_ERROR_TOPIC:-}
+      - MQTT_DROPPED_TOTAL_TOPIC=${MQTT_DROPPED_TOTAL_TOPIC:-}
+      - MQTT_FAILED_TOTAL_TOPIC=${MQTT_FAILED_TOTAL_TOPIC:-}
       # Home Assistant MQTT discovery: the device and its sensors are created
       # on their own. HA_DISCOVERY=0 turns it off; HA_DEVICE_NAME names the
       # device (defaults to PRINTER_NAME).

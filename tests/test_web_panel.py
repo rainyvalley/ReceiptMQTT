@@ -510,3 +510,35 @@ class TestDiscoveryInfo:
         body = json.loads(client.get("/settings", headers=auth_pair()).data)
         assert body["discovery"]["node"] == "receiptmqtt_kitchen_commands"
         assert "receiptmqtt_kitchen_commands" in body["discovery"]["acl"]
+
+
+class TestTopicPrefixField:
+    @pytest.fixture
+    def settings_file(self, tmp_path, monkeypatch):
+        path = tmp_path / "settings.json"
+        monkeypatch.setattr(w.settings_store, "SETTINGS_FILE", str(path))
+        for key in w.settings_store.KEYS:
+            monkeypatch.delenv(key, raising=False)
+        before = escpos.PAPER_WIDTH_MM
+        yield path
+        escpos.apply_paper_width(before)
+
+    def test_post_prefix_sets_every_topic(self, client, settings_file):
+        resp = client.post("/settings", headers=post_pair(),
+                           data={"MQTT_TOPIC_PREFIX": "receiptprinter2"})
+        assert json.loads(resp.data)["saved"] is True
+        body = json.loads(client.get("/settings", headers=auth_pair()).data)
+        assert body["settings"]["MQTT_TOPIC_PREFIX"] == "receiptprinter2"
+        assert body["topics"]["MQTT_TOPIC"] == "receiptprinter2/commands"
+        assert body["topics"]["MQTT_AVAILABILITY_TOPIC"] == (
+            "receiptprinter2/availability")
+        assert body["topics"]["MQTT_FAILED_TOTAL_TOPIC"] == (
+            "receiptprinter2/failed_total")
+
+    def test_get_reports_environment_topic_overrides(self, client,
+                                                     settings_file,
+                                                     monkeypatch):
+        monkeypatch.setenv("MQTT_PAPER_TOPIC", "custom/paper")
+        body = json.loads(client.get("/settings", headers=auth_pair()).data)
+        assert body["topic_overrides"] == ["MQTT_PAPER_TOPIC"]
+        assert body["topics"]["MQTT_PAPER_TOPIC"] == "custom/paper"

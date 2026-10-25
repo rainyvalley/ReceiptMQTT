@@ -115,3 +115,61 @@ class TestUpdate:
         assert result["saved"] is False
         assert any(message in error for error in result["errors"])
         assert not path.exists()
+
+
+class TestTopicPrefix:
+    def test_default_prefix_builds_every_topic(self, tmp_path):
+        values = settings_store.effective(env={}, path=tmp_path / "s.json")
+        assert values["MQTT_TOPIC_PREFIX"] == "printer"
+        assert values["MQTT_TOPIC"] == "printer/commands"
+        assert values["MQTT_AVAILABILITY_TOPIC"] == "printer/availability"
+        assert values["MQTT_PAPER_TOPIC"] == "printer/paper"
+        assert values["MQTT_PAPER_LOW_TOPIC"] == "printer/paper_low"
+        assert values["MQTT_LAST_ERROR_TOPIC"] == "printer/last_error"
+        assert values["MQTT_DROPPED_TOTAL_TOPIC"] == "printer/dropped_total"
+        assert values["MQTT_FAILED_TOTAL_TOPIC"] == "printer/failed_total"
+
+    def test_saved_prefix_moves_every_topic(self, tmp_path):
+        path = tmp_path / "s.json"
+        result = settings_store.update(
+            {"MQTT_TOPIC_PREFIX": "receiptprinter2/"}, env={}, path=path)
+        assert result["saved"] is True
+        values = settings_store.effective(env={}, path=path)
+        assert values["MQTT_TOPIC_PREFIX"] == "receiptprinter2"
+        assert values["MQTT_TOPIC"] == "receiptprinter2/commands"
+        assert values["MQTT_FAILED_TOTAL_TOPIC"] == "receiptprinter2/failed_total"
+        assert settings_store.stored(path) == {
+            "MQTT_TOPIC_PREFIX": "receiptprinter2"}
+
+    def test_per_topic_environment_still_wins(self, tmp_path):
+        path = tmp_path / "s.json"
+        settings_store.save({"MQTT_TOPIC_PREFIX": "printer_two"}, path)
+        values = settings_store.effective(
+            env={"MQTT_PAPER_TOPIC": "custom/paper"}, path=path)
+        assert values["MQTT_PAPER_TOPIC"] == "custom/paper"
+        assert values["MQTT_TOPIC"] == "printer_two/commands"
+
+    def test_old_per_topic_values_survive_until_a_prefix_is_saved(self, tmp_path):
+        path = tmp_path / "s.json"
+        settings_store.save({"MQTT_TOPIC": "legacy/commands"}, path)
+        values = settings_store.effective(env={}, path=path)
+        assert values["MQTT_TOPIC"] == "legacy/commands"
+        assert values["MQTT_PAPER_TOPIC"] == "printer/paper"
+        settings_store.update({"MQTT_TOPIC_PREFIX": "newprinter"},
+                              env={}, path=path)
+        values = settings_store.effective(env={}, path=path)
+        assert values["MQTT_TOPIC"] == "newprinter/commands"
+        assert "MQTT_TOPIC" not in settings_store.stored(path)
+
+    @pytest.mark.parametrize("value,message", [
+        ("", "plain topic prefix"),
+        ("/leading", "plain topic prefix"),
+        ("$sys", "plain topic prefix"),
+        ("bad prefix", "plain topic prefix"),
+        ("a/#", "plain topic prefix"),
+    ])
+    def test_invalid_prefix_is_refused(self, tmp_path, value, message):
+        result = settings_store.update(
+            {"MQTT_TOPIC_PREFIX": value}, env={}, path=tmp_path / "s.json")
+        assert result["saved"] is False
+        assert any(message in error for error in result["errors"])
