@@ -129,8 +129,8 @@ Set these in `.env`. Compose passes them on. A setting that is missing or empty 
 | `CUTTING` | `0` with Compose, `1` with plain `docker run` | `0` no cut. `1` cut after each page. `2` cut at the end of the job. |
 | `BLANK_SPACE` | `1` | `1` does not feed blank space at the end of a receipt. `0` feeds it. |
 | `CASH_DRAWER1`, `CASH_DRAWER2` | `0` | `0` off. `1` open the drawer before printing. `2` open it after. |
-| `PAPER_WIDTH_MM` | `48` | Paper width: `48` or `80`. See [Paper width](#paper-width). |
-| `RASTER_WIDTH_PX` | empty | Page width in dots. Leave it empty: `PAPER_WIDTH_MM` sets it (384 for 48 mm, 576 for 80 mm). |
+| `PAPER_WIDTH_MM` | `48` | Paper width: `48`, `58` or `80`. This also picks the print area. See [Paper width](#paper-width). |
+| `RASTER_WIDTH_PX` | empty | Print area in dots. Leave it empty: `PAPER_WIDTH_MM` sets it (384 for 48 and 58 mm paper, 576 for 80 mm). |
 | `RASTER_HEIGHT_PX` | `480` | Longest receipt in dot lines. 480 is about 60 mm. See [Long receipts](#long-receipts). |
 | `RASTER_DPI_X`, `RASTER_DPI_Y` | `203` | Print resolution. |
 
@@ -176,10 +176,15 @@ Set **`PAPER_WIDTH_MM`** in `.env` (or in `docker-compose.yml`) and restart the 
 PAPER_WIDTH_MM=80
 ```
 
-| Value | Dots | Paper |
-|---|---|---|
-| `48` (default) | 384 | ZJ-58 / POS58 |
-| `80` | 576 | ZJ-80 and other 80 mm printers |
+The setting picks the print area as well, because a thermal head cannot reach
+the paper edges. A "58 mm" roll prints a 48 mm area, so it uses the same 384
+dots as 48 mm paper. An 80 mm roll prints 72 mm.
+
+| Value | Print area | Dots | Typical printer |
+|---|---|---|---|
+| `48` (default) | 48 mm | 384 | ZJ-58 / POS58 |
+| `58` | 48 mm | 384 | "58 mm" printers, which print a 48 mm area |
+| `80` | 72 mm | 576 | ZJ-80 and other 80 mm printers |
 
 Any other value is ignored and 48 is used, with a line in the log.
 

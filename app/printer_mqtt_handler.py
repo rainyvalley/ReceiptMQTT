@@ -678,9 +678,11 @@ def break_word(word, max_width, font="Helvetica", size=10):
 
 def generate_pdf(title, message, pdf_path):
     """Generate a PDF optimized for thermal receipt printers."""
-    # Page width follows PAPER_WIDTH_MM (48 mm = 384 px, 80 mm = 576 px at
-    # 203 dpi); height is dynamic.
-    page_width = escpos.PAPER_WIDTH_MM * mm
+    # Lay the page out to the printable area, not the roll width: 48 mm paper
+    # gives 384 px, a "58 mm" roll also gives 384 px (48 mm printable) and an
+    # 80 mm roll gives 576 px (72 mm printable) at 203 dpi. Using the roll
+    # width here would push the right margin past the raster and clip it.
+    page_width = escpos.PRINT_AREA_MM * mm
     margin = 5 * mm  # Margins for the receipt
     content_width = page_width - (2 * margin)
 

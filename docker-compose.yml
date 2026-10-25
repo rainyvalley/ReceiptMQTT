@@ -23,8 +23,9 @@ services:
       - BLANK_SPACE=${BLANK_SPACE:-1}
       - CASH_DRAWER1=${CASH_DRAWER1:-0}
       - CASH_DRAWER2=${CASH_DRAWER2:-0}
-      # Paper width in mm: 48 (default) or 80. This one setting sets the page,
-      # dot width and row size. 80 mm has not been tested on a real printer.
+      # Paper width in mm: 48 (default), 58 or 80. The setting also picks the
+      # print area: 58 mm rolls print 48 mm (384 dots), 80 mm rolls print
+      # 72 mm (576 dots). 80 mm has not been tested on a real printer.
       - PAPER_WIDTH_MM=${PAPER_WIDTH_MM:-48}
       - RASTER_DPI_X=${RASTER_DPI_X:-203}
       - RASTER_DPI_Y=${RASTER_DPI_Y:-203}

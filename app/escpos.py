@@ -27,12 +27,19 @@ SKIPPED_BLANK_LINES = 24  # rastertozj.c skiplines(24) for blank bands
 ENDPAGE_FEED = 0x18       # rastertozj.c skiplines(0x18) perFeedDist unit
 MAX_BAND_LINES = 24       # ESC/POS raster band height from rastertozj.c
 
-# Paper width -> (raster dots at 203 dpi, bytes per raster row).
-PAPER_PROFILES = {48: (384, 48), 80: (576, 72)}
+# Paper width -> (printable area in mm, raster dots at 203 dpi, bytes per
+# raster row). The head cannot reach the paper edges, so the option that
+# picks the paper also picks the print area: a "58 mm" roll prints 48 mm
+# (384 dots) and an 80 mm roll prints 72 mm (576 dots).
+PAPER_PROFILES = {
+    48: (48, 384, 48),
+    58: (48, 384, 48),
+    80: (72, 576, 72),
+}
 
 
 def paper_width_mm(env=None):
-    """PAPER_WIDTH_MM from the environment: 48 (default) or 80."""
+    """PAPER_WIDTH_MM from the environment: 48 (default), 58 or 80."""
     raw = (os.environ if env is None else env).get("PAPER_WIDTH_MM", "").strip()
     if not raw:
         return 48
@@ -41,13 +48,14 @@ def paper_width_mm(env=None):
     except ValueError:
         mm = 0
     if mm not in PAPER_PROFILES:
-        print(f"Ignoring invalid PAPER_WIDTH_MM={raw!r}; using 48 (allowed: 48, 80)")
+        print(f"Ignoring invalid PAPER_WIDTH_MM={raw!r}; using 48 "
+              f"(allowed: 48, 58, 80)")
         return 48
     return mm
 
 
 PAPER_WIDTH_MM = paper_width_mm()
-PAPER_WIDTH_PX, MAX_WIDTH_BYTES = PAPER_PROFILES[PAPER_WIDTH_MM]
+PRINT_AREA_MM, PAPER_WIDTH_PX, MAX_WIDTH_BYTES = PAPER_PROFILES[PAPER_WIDTH_MM]
 
 
 class EscposSettings:

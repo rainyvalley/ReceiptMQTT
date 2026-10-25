@@ -117,7 +117,8 @@ against `printer_mqtt_handler.print_job()` output.
 ## Page length (was a PPD matter)
 
 The old PPD page sizes (`X48MMY60MM` etc.) became ghostscript geometry:
-`RASTER_WIDTH_PX` (384 at the default 48 mm; set by `PAPER_WIDTH_MM`) x a per-receipt raster height at 203 dpi. The
+`RASTER_WIDTH_PX` (384 for 48 mm and "58 mm" paper, 576 for 80 mm; set by
+`PAPER_WIDTH_MM`) x a per-receipt raster height at 203 dpi. The
 historical lesson still applies: rastertozj padded every job to the full
 declared page length, so with a 210 mm declared page a two-line receipt fed
 eight inches of paper. The reportlab stage sizes each receipt's PDF to its

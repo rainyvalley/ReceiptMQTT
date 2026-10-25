@@ -421,6 +421,13 @@ class TestGeneratePdf:
         assert pdf.exists() and pdf.stat().st_size > 0
         assert page_height == pytest.approx(48 * h.mm + 1)
 
+    def test_page_width_follows_the_print_area(self, tmp_path, monkeypatch):
+        # 80 mm paper prints 72 mm; the page must not be laid out to the roll
+        # width or the right margin lands outside the raster.
+        monkeypatch.setattr(h.escpos, "PRINT_AREA_MM", 72)
+        page_height = h.generate_pdf("T", "hi", str(tmp_path / "w.pdf"))
+        assert page_height == pytest.approx(72 * h.mm + 1)
+
     def test_line_count_drives_height(self, tmp_path):
         pdf = tmp_path / "lines.pdf"
         message = "\n".join(["abcdefghij"] * 12)
