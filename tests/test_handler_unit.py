@@ -672,6 +672,59 @@ class TestStartupWarnings:
         assert h.startup_warnings("u", "p", env={}) == []
 
 
+class TestBootReceipt:
+    class FakeWorker:
+        def __init__(self, accepted=True):
+            self.accepted = accepted
+            self.jobs = []
+
+        def submit(self, job, label=""):
+            self.jobs.append((job, label))
+            return self.accepted
+
+    def test_message_reports_printer_broker_and_topic(self, monkeypatch):
+        monkeypatch.setattr(h, "printer_device", "/dev/usb/lp7")
+        monkeypatch.setattr(h, "broker", "192.0.2.10")
+        monkeypatch.setattr(h, "broker_port", 8883)
+        monkeypatch.setattr(h, "topic", "kitchen/commands")
+        title, message = h.online_receipt_message()
+        assert title == "ReceiptMQTT online"
+        assert "online" in message
+        assert "Printer: /dev/usb/lp7" in message
+        assert "Broker: 192.0.2.10:8883" in message
+        assert "Topic: kitchen/commands" in message
+
+    def test_announce_logs_and_queues_the_receipt(self, monkeypatch, capsys):
+        monkeypatch.setattr(h, "BOOT_RECEIPT", True)
+        monkeypatch.setattr(h, "printer_device", "/dev/usb/lp0")
+        monkeypatch.setattr(h, "broker", "broker.local")
+        monkeypatch.setattr(h, "topic", "printer/commands")
+        printed = []
+        monkeypatch.setattr(h, "print_job",
+                            lambda title, message: printed.append((title, message)))
+        worker = self.FakeWorker()
+        assert h.announce_online(worker) is True
+        assert len(worker.jobs) == 1
+        job, label = worker.jobs[0]
+        assert label == "ReceiptMQTT online"
+        job()
+        assert printed and printed[0][0] == "ReceiptMQTT online"
+        assert "ReceiptMQTT online" in capsys.readouterr().out
+
+    def test_disabled_prints_nothing(self, monkeypatch, capsys):
+        monkeypatch.setattr(h, "BOOT_RECEIPT", False)
+        worker = self.FakeWorker()
+        assert h.announce_online(worker) is False
+        assert worker.jobs == []
+        assert "ReceiptMQTT online" in capsys.readouterr().out
+
+    def test_full_queue_is_logged(self, monkeypatch, capsys):
+        monkeypatch.setattr(h, "BOOT_RECEIPT", True)
+        worker = self.FakeWorker(accepted=False)
+        assert h.announce_online(worker) is False
+        assert "not queued" in capsys.readouterr().out
+
+
 class TestEnvRobustness:
     def test_empty_topic_env_uses_default(self, monkeypatch):
         import importlib

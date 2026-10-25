@@ -131,6 +131,7 @@ Most installs only set `MQTT_TOPIC_PREFIX`. The single-topic variables are there
 |---|---|---|
 | `PRINTER_DEVICE` | `/dev/usb/lp1` | The printer's device file. The older name `PAPER_DEVICE` is used if `PRINTER_DEVICE` is not set. |
 | `PRINTER_NAME` | `ReceiptPrinter` | Name of the small monitoring queue the availability check looks at. It is not used for printing. |
+| `BOOT_RECEIPT` | `1` | Print a short "online" receipt after the first successful broker connect, so a boot is confirmed on paper. `0` turns the paper receipt off; the log still says the server is online. |
 | `FEED_DIST` | `0` with Compose, `2` with plain `docker run` | How many extra paper feeds after each receipt. Each is about 3 mm. |
 | `CUTTING` | `0` with Compose, `1` with plain `docker run` | `0` no cut. `1` cut after each page. `2` cut at the end of the job. |
 | `BLANK_SPACE` | `1` | `1` does not feed blank space at the end of a receipt. `0` feeds it. |

@@ -18,6 +18,10 @@ services:
       - PRINTER_DEVICE=${PRINTER_DEVICE:-${PAPER_DEVICE:-/dev/usb/lp1}}
       - PRINTER_NAME=${PRINTER_NAME:-ReceiptPrinter}
       - PRINTER_URI=${PRINTER_URI:-}
+      # Print a short "online" receipt after the first successful broker
+      # connect. BOOT_RECEIPT=0 turns the paper receipt off (the log line
+      # stays); useful on a printer with no paper sensor or a shared queue.
+      - BOOT_RECEIPT=${BOOT_RECEIPT:-1}
       # Feed and cut after each receipt. These match the old setup (no extra
       # feed, no cut). The program's own defaults, used by plain `docker
       # run`, are FEED_DIST=2 and CUTTING=1.

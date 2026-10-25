@@ -314,6 +314,10 @@ PRINT_QUEUE_SIZE = _env_int("PRINT_QUEUE_SIZE", 16)
 # flood of messages from tying up the printer and ghostscript for hours.
 MAX_JOBS_PER_MINUTE = _env_int("MAX_JOBS_PER_MINUTE", 30)
 SHUTDOWN_JOIN_TIMEOUT = 10   # seconds to wait for the worker on exit
+# Print a short "online" receipt after the first successful broker connect.
+# A missing device or empty paper only logs a failed job; the handler still
+# comes online. BOOT_RECEIPT=0 turns the paper receipt off.
+BOOT_RECEIPT = _env_bool("BOOT_RECEIPT", True)
 
 
 ERROR_TITLE_CAP = 40      # chars of job title echoed in a last_error message
@@ -1100,6 +1104,39 @@ def print_job(title, message):
     print(f"Printed {len(escpos_bytes)} ESC/POS bytes.")
 
 
+def online_receipt_message():
+    """(title, message) for the receipt printed once after a successful boot."""
+    started = (datetime.now().astimezone()
+               .strftime("%Y-%m-%d %H:%M:%S %Z").strip())
+    message = ("The receipt printer server is online.\n\n"
+               f"Printer: {printer_device or 'not set'}\n"
+               f"Broker: {broker}:{broker_port}\n"
+               f"Topic: {topic}\n"
+               f"Started: {started}")
+    return "ReceiptMQTT online", message
+
+
+def announce_online(worker=None):
+    """Log the online state and queue the boot receipt when enabled.
+
+    Called once per process, after the first successful broker connect. The
+    receipt goes through the normal print worker, so a missing printer only
+    reports a failed job instead of keeping the handler from going online.
+    """
+    print(f"ReceiptMQTT online: printer {printer_device or 'not set'}, "
+          f"broker {broker}:{broker_port}, topic {topic}")
+    if not BOOT_RECEIPT:
+        return False
+    title, message = online_receipt_message()
+    worker = get_worker() if worker is None else worker
+    queued = worker.submit(lambda: print_job(title, message), label=title)
+    if queued:
+        print(f"Online receipt queued: {title}")
+    else:
+        print(f"Online receipt not queued (print queue busy): {title}")
+    return queued
+
+
 if __name__ == "__main__":
     # paho-mqtt 2.x makes CallbackAPIVersion a required first argument; 1.x
     # (what Alpine ships) does not know it. Pick the calling convention from
@@ -1143,7 +1180,11 @@ if __name__ == "__main__":
     start_settings_watcher(client, reload_event)
 
     try:
+        announced = False
         while connect_with_retry(client, broker, broker_port, 60):
+            if not announced:
+                announced = True
+                announce_online()
             try:
                 client.loop_forever()
             except Exception as e:
