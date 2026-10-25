@@ -72,7 +72,10 @@ services:
     security_opt:
       - no-new-privileges:true
     pids_limit: 256
-    mem_limit: 512m
+    # Override in .env on small boards: a Pi Zero W has 426 MB in total, so
+    # a 512 MB limit lets the container exhaust the host before the cgroup
+    # OOM killer acts. MEM_LIMIT=384m is a sensible ceiling there.
+    mem_limit: ${MEM_LIMIT:-512m}
     ulimits:
       nofile:
         soft: 65536

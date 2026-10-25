@@ -30,30 +30,42 @@ if [ -z "$ADMIN_PASS" ]; then
   exit 1
 fi
 
+# busybox adduser/addgroup/chpasswd: the image has no shadow and no init
+# system, so users and daemons are created and started directly.
 if ! id -u "$ADMIN_USER" > /dev/null 2>&1; then
   echo "Creating admin user..."
-  adduser --disabled-password --gecos "" "$ADMIN_USER"
+  # The group normally comes from the CUPS package; re-create it only if a
+  # cut-down base lacks it.
+  addgroup -S lpadmin 2>/dev/null || true
+  adduser -D -H -s /sbin/nologin -g "CUPS admin" "$ADMIN_USER"
   echo "$ADMIN_USER:$ADMIN_PASS" | chpasswd
-  usermod -aG lpadmin "$ADMIN_USER"
+  addgroup "$ADMIN_USER" lpadmin
 else
   echo "Admin user already exists."
 fi
 
-# Start D-Bus
+# Start D-Bus (CUPS links against it; Browsing is off but cupsd still opens
+# the system bus). dbus-daemon --fork returns immediately, so nothing has to
+# supervise it.
 echo "Starting D-Bus..."
-mkdir -p /var/run/dbus
-service dbus start || true
+mkdir -p /run/dbus
+if dbus-daemon --system --fork --nopidfile; then
+  echo "D-Bus started."
+else
+  echo "WARNING: D-Bus did not start; CUPS will log a bus warning."
+fi
 
 # Stop any running CUPS processes
 echo "Ensuring no conflicting CUPS processes..."
 pkill cupsd || true
 
-# Start CUPS service
-echo "Starting CUPS service..."
-if service cups start; then
-  echo "CUPS service started successfully."
+# Start CUPS. cupsd daemonises by default and writes /var/log/cups/error_log
+# (paths set in cups-files.conf).
+echo "Starting CUPS..."
+if cupsd; then
+  echo "CUPS started successfully."
 else
-  echo "Failed to start CUPS service."
+  echo "Failed to start CUPS."
   exit 1
 fi
 
@@ -94,8 +106,10 @@ lpadmin -d "$PRINTER_NAME"
 cupsaccept "$PRINTER_NAME"
 cupsenable "$PRINTER_NAME"
 
-# Tail the CUPS log in the background
+# Tail the CUPS log in the background. cupsd only creates error_log once
+# it has something to log, and LogLevel is "warn", so touch it first.
 echo "Tailing CUPS logs..."
+touch /var/log/cups/error_log
 tail -F /var/log/cups/error_log &
 
 # Run the app as the unprivileged "receipt" user. It needs write access to
@@ -103,7 +117,9 @@ tail -F /var/log/cups/error_log &
 # may differ from this image's "lp"). If the device still is not writable,
 # say so and fall back to root so an existing install keeps printing.
 APP_USER=receipt
-APP_GROUPS=$(getent group lp | cut -d: -f3)
+# Not getent: musl's getent lives in musl-utils, which the image does not
+# install. The group file is the source either way.
+APP_GROUPS=$(awk -F: '$1 == "lp" {print $3}' /etc/group)
 if [ -e "$PRINTER_DEVICE" ]; then
   DEVICE_GID=$(stat -c %g "$PRINTER_DEVICE")
   # never hand the app root's group

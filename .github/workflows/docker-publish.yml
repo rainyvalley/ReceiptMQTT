@@ -94,10 +94,10 @@ jobs:
 
   smoke-test:
     # Integration leg: the full reportlab -> ghostscript pbmraw -> escpos
-    # pipeline with the apt-installed runtime stack inside the same
-    # debian:trixie-slim base the image uses.
+    # pipeline with the apk-installed runtime stack inside the same
+    # alpine:3.22 base the image uses. The test runs via docker run rather
+    # than a job container: JS actions (checkout) cannot run on musl.
     runs-on: ubuntu-latest
-    container: debian:trixie-slim
     permissions:
       contents: read
     steps:
@@ -106,26 +106,26 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install test dependencies
-        run: |
-          apt-get update
-          apt-get install -y --no-install-recommends \
-            python3 python3-paho-mqtt python3-reportlab ghostscript xxd
-
       - name: Run pipeline smoke test
         run: |
-          # CI containers run as root: CUPS is not started here, so only the
-          # in-process pipeline (reportlab -> gs -> escpos) is exercised.
-          bash scripts/smoke_test.sh
+          # The container runs as root and CUPS is not started here, so only
+          # the in-process pipeline (reportlab -> gs -> escpos) is exercised.
+          docker run --rm -v "$PWD:/src" -w /src alpine:3.22 sh -c '
+            apk add --no-cache bash python3 py3-reportlab ghostscript xxd \
+            && bash scripts/smoke_test.sh'
 
   container-check:
-    # Gate between the in-container integration test and the QEMU push:
-    # run the built amd64 image and prove bytes actually reach
-    # PRINTER_DEVICE. No broker is involved: the container is started with
-    # the normal entrypoint disabled and scripts/container_device_check.py
-    # drives send_raw_to_printer directly against a mounted device file.
+    # Gate between the in-container integration test and the push:
+    # run the built images and prove bytes actually reach PRINTER_DEVICE.
+    # No broker is involved: the container is started with the normal
+    # entrypoint disabled and scripts/container_device_check.py drives
+    # send_raw_to_printer directly against a mounted device file.
     # This verifies the containerised Python runtime + app code + device
-    # writing - deliberately not a full MQTT (broker) round-trip.
+    # writing - deliberately not a full MQTT (broker) round-trip. The
+    # arm/v6 leg runs the same check under QEMU so a broken 32-bit build
+    # cannot reach the registry (it runs on ARMv7 emulation, so it proves
+    # the image works, not that every instruction is ARMv6-safe - the
+    # Alpine armhf base is what makes it ARMv6).
     needs: [lint, unit-tests, smoke-test]
     runs-on: ubuntu-latest
     permissions:
@@ -136,26 +136,49 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1  # v4.4.0
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435  # v3.11.1
 
       - name: Build amd64 image
         run: docker build -f dockerfile -t receiptmqtt:ci .
 
+      - name: Build arm/v6 image
+        run: docker buildx build --platform linux/arm/v6 -f dockerfile -t receiptmqtt:ci-armv6 --load .
+
+      - name: Unit tests on the image's Python stack (arm/v6)
+        run: |
+          # The apk packages (paho, flask, reportlab) are not the pip pins in
+          # requirements-dev.txt, and reportlab in particular is much older on
+          # Alpine. Run the suite against what the image actually ships, on
+          # the slowest architecture, so a version gap fails CI here.
+          docker run --rm --platform linux/arm/v6 \
+            -v "$PWD:/src" -w /src \
+            --entrypoint sh receiptmqtt:ci-armv6 -c '
+              apk add --no-cache py3-pytest > /dev/null &&
+              python3 -m pytest -q -p no:cacheprovider tests'
+
       - name: Send raw ESC/POS through the container to a device file
         run: |
           set -euo pipefail
-          mkdir -p /tmp/receiptmqtt-device
-          rm -f /tmp/receiptmqtt-device/out.bin
-          docker run --rm \
-            -e PRINTER_DEVICE=/tmp/out.bin \
-            -v /tmp/receiptmqtt-device:/tmp \
-            -v "$PWD/scripts:/containerscripts:ro" \
-            --entrypoint python3 \
-            receiptmqtt:ci \
-            /containerscripts/container_device_check.py /tmp/out.bin
-          # belt and braces: the file on the host side is non-empty
-          test -s /tmp/receiptmqtt-device/out.bin
+          check() {
+            image=$1 platform=$2 dir=$3
+            mkdir -p "$dir"
+            rm -f "$dir/out.bin"
+            docker run --rm --platform "$platform" \
+              -e PRINTER_DEVICE=/tmp/out.bin \
+              -v "$dir":/tmp \
+              -v "$PWD/scripts:/containerscripts:ro" \
+              --entrypoint python3 \
+              "$image" \
+              /containerscripts/container_device_check.py /tmp/out.bin
+            # belt and braces: the file on the host side is non-empty
+            test -s "$dir/out.bin"
+          }
+          check receiptmqtt:ci linux/amd64 /tmp/receiptmqtt-device-amd64
+          check receiptmqtt:ci-armv6 linux/arm/v6 /tmp/receiptmqtt-device-armv6
 
   build-and-push:
     needs: [container-check]
@@ -204,7 +227,7 @@ jobs:
         with:
           context: .
           file: ./dockerfile
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64,linux/arm64,linux/arm/v6
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

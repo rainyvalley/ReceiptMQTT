@@ -4,7 +4,7 @@
 # 1. app/escpos.py selftest: header + tail structure of the ESC/POS stream.
 # 2. Raster banding structure with synthetic PBM input.
 # 3. Full pipeline (reportlab -> ghostscript pbmraw -> escpos): runs when
-#    reportlab is installed (CI installs it via apt inside trixie-slim);
+#    reportlab is installed (CI installs it with apk inside alpine:3.22);
 #    skipped silently on hosts that cannot install it (PEP 668).
 #
 # Optional hardware-free CUPS leg: start the container with
@@ -16,7 +16,10 @@ cd "$(dirname "$0")/.."
 APP_DIR="$(pwd)/app"
 
 echo "== escpos selftest =="
-SELFTEST="$(python3 "$APP_DIR/escpos.py" --selftest | head -c 6 | xxd -p)"
+# Read the whole stream, not `| head -c 6`: with pipefail, head closing the
+# pipe makes python die with BrokenPipeError on a fast (busybox) pipeline.
+SELFTEST_HEX="$(python3 "$APP_DIR/escpos.py" --selftest | xxd -p | tr -d '\n')"
+SELFTEST="${SELFTEST_HEX:0:12}"
 [ "$SELFTEST" = "1b401d763000" ] || { echo "FAIL: selftest header wrong: $SELFTEST"; exit 1; }
 echo "PASS header 1b40 + GS v 0"
 
