@@ -382,6 +382,17 @@ class TestSettingsEndpoints:
         assert resp.status_code == 403
         assert not settings_file.exists()
 
+    def test_extra_feed_reaches_the_test_print(self, client, settings_file,
+                                               monkeypatch):
+        writes = []
+        monkeypatch.setattr(h, "_write_device",
+                            lambda path, data: writes.append(data) or len(data))
+        assert client.post("/settings", headers=post_pair(),
+                           data={"EXTRA_FEED_MM": "9"}
+                           ).status_code == 200
+        assert client.post("/test-print", headers=post_pair()).status_code == 200
+        assert escpos.feed_lines(9) in writes[0]
+
     @pytest.mark.parametrize("data,message", [
         ({"PAPER_WIDTH_MM": "57"}, "PAPER_WIDTH_MM must be"),
         ({"MQTT_TOPIC": "bad topic"}, "plain MQTT topic"),

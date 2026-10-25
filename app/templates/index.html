@@ -25,6 +25,12 @@
             <span class="locked-note" data-key="PAPER_WIDTH_MM"></span>
         </p>
         <p>
+            <label for="EXTRA_FEED_MM">Extra feed after printing (mm)</label>
+            <input id="EXTRA_FEED_MM" name="EXTRA_FEED_MM" type="number"
+                   min="0" max="250" step="1">
+            <span class="locked-note" data-key="EXTRA_FEED_MM"></span>
+        </p>
+        <p>
             <label for="PRINTER_DEVICE">Printer device</label>
             <input id="PRINTER_DEVICE" name="PRINTER_DEVICE" size="28">
             <span class="locked-note" data-key="PRINTER_DEVICE"></span>
@@ -74,7 +80,8 @@
     </form>
 
     <script>
-        const SETTING_KEYS = ['PAPER_WIDTH_MM', 'PRINTER_DEVICE', 'MQTT_BROKER',
+        const SETTING_KEYS = ['PAPER_WIDTH_MM', 'EXTRA_FEED_MM',
+                              'PRINTER_DEVICE', 'MQTT_BROKER',
                               'MQTT_USERNAME', 'MQTT_PASSWORD',
                               'MQTT_TOPIC_PREFIX'];
 

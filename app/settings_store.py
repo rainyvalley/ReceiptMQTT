@@ -16,7 +16,8 @@ import tempfile
 
 SETTINGS_FILE = os.getenv("SETTINGS_FILE") or "/app/data/settings.json"
 
-KEYS = ("PAPER_WIDTH_MM", "MQTT_BROKER", "MQTT_USERNAME", "MQTT_PASSWORD",
+KEYS = ("PAPER_WIDTH_MM", "EXTRA_FEED_MM", "MQTT_BROKER", "MQTT_USERNAME",
+        "MQTT_PASSWORD",
         "MQTT_TOPIC_PREFIX", "MQTT_TOPIC", "MQTT_AVAILABILITY_TOPIC",
         "MQTT_PAPER_TOPIC", "MQTT_PAPER_LOW_TOPIC",
         "MQTT_LAST_ERROR_TOPIC", "MQTT_DROPPED_TOTAL_TOPIC",
@@ -40,6 +41,7 @@ TOPIC_KEYS = tuple(TOPIC_SUFFIXES)
 # starts from these, so its form shows what the app would do anyway.
 DEFAULTS = {
     "PAPER_WIDTH_MM": "48",
+    "EXTRA_FEED_MM": "0",
     "MQTT_TOPIC_PREFIX": "printer",
     "MQTT_BROKER": "localhost",
     "MQTT_USERNAME": "",
@@ -153,6 +155,16 @@ def validate(values):
             if value not in allowed:
                 errors.append("PAPER_WIDTH_MM must be 48, 58 or 80")
                 continue
+        elif key == "EXTRA_FEED_MM":
+            try:
+                number = int(value)
+            except ValueError:
+                number = -1
+            if not 0 <= number <= 250:
+                errors.append("EXTRA_FEED_MM must be a whole number of "
+                              "millimetres from 0 to 250")
+                continue
+            value = str(number)
         elif key == "PRINTER_DEVICE":
             if not value.startswith("/") or value == "/":
                 errors.append("PRINTER_DEVICE must be an absolute path")
@@ -221,6 +233,13 @@ def update(values, env=None, path=None):
     merged.update(clean)
     save(merged, path)
     return {"saved": True, "errors": [], "ignored_locked": ignored}
+
+
+def runtime_env(env=None, path=None):
+    """os.environ plus the panel values, for EscposSettings.from_env()."""
+    merged = dict(os.environ if env is None else env)
+    merged.update(effective(env, path))
+    return merged
 
 
 def fingerprint(path=None):

@@ -173,3 +173,19 @@ class TestTopicPrefix:
             {"MQTT_TOPIC_PREFIX": value}, env={}, path=tmp_path / "s.json")
         assert result["saved"] is False
         assert any(message in error for error in result["errors"])
+
+
+class TestExtraFeed:
+    def test_default_is_zero_and_saved_value_applies(self, tmp_path):
+        path = tmp_path / "s.json"
+        assert settings_store.effective(env={}, path=path)["EXTRA_FEED_MM"] == "0"
+        assert settings_store.update({"EXTRA_FEED_MM": "12"},
+                                     env={}, path=path)["saved"] is True
+        assert settings_store.effective(env={}, path=path)["EXTRA_FEED_MM"] == "12"
+
+    @pytest.mark.parametrize("value", ["-1", "251", "abc", "1.5"])
+    def test_must_be_whole_mm_in_range(self, tmp_path, value):
+        result = settings_store.update(
+            {"EXTRA_FEED_MM": value}, env={}, path=tmp_path / "s.json")
+        assert result["saved"] is False
+        assert any("EXTRA_FEED_MM" in error for error in result["errors"])

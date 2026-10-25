@@ -136,6 +136,7 @@ Most installs only set `MQTT_TOPIC_PREFIX`. The single-topic variables are there
 | `BLANK_SPACE` | `1` | `1` does not feed blank space at the end of a receipt. `0` feeds it. |
 | `CASH_DRAWER1`, `CASH_DRAWER2` | `0` | `0` off. `1` open the drawer before printing. `2` open it after. |
 | `PAPER_WIDTH_MM` | `48` | Paper width: `48`, `58` or `80`. This also picks the print area. See [Paper width](#paper-width). |
+| `EXTRA_FEED_MM` | `0` | Extra paper to feed after each page, in millimetres, before the cut. Use it for a printer that needs a little more clearance. `0` adds nothing. |
 | `RASTER_WIDTH_PX` | empty | Print area in dots. Leave it empty: `PAPER_WIDTH_MM` sets it (384 for 48 and 58 mm paper, 576 for 80 mm). |
 | `RASTER_HEIGHT_PX` | `480` | Longest receipt in dot lines. 480 is about 60 mm. See [Long receipts](#long-receipts). |
 | `RASTER_DPI_X`, `RASTER_DPI_Y` | `203` | Print resolution. |
@@ -180,7 +181,7 @@ A number that is not a whole number, or is too small, is ignored and the default
 
 The panel can change these values, so a plain `docker run` install does not need a `.env` at all:
 
-- paper width, printer device
+- paper width, extra feed length, printer device
 - MQTT broker, username and password
 - the MQTT topic prefix, which builds all seven topics
 

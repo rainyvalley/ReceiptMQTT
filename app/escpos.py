@@ -75,12 +75,13 @@ class EscposSettings:
     """
 
     def __init__(self, cash_drawer1=0, cash_drawer2=0, blank_space=1,
-                 feed_dist=2, cutting=1):
+                 feed_dist=2, cutting=1, extra_feed_mm=0):
         self.cash_drawer1 = cash_drawer1
         self.cash_drawer2 = cash_drawer2
         self.blank_space = blank_space
         self.feed_dist = feed_dist
         self.cutting = cutting
+        self.extra_feed_mm = extra_feed_mm
 
     @classmethod
     def from_env(cls, env=None):
@@ -99,7 +100,7 @@ class EscposSettings:
 
         return cls(int_env("CASH_DRAWER1", 0), int_env("CASH_DRAWER2", 0),
                    int_env("BLANK_SPACE", 1), int_env("FEED_DIST", 2),
-                   int_env("CUTTING", 1))
+                   int_env("CUTTING", 1), int_env("EXTRA_FEED_MM", 0))
 
 
 def raster_header(width_bytes, height_lines):
@@ -112,6 +113,21 @@ def raster_header(width_bytes, height_lines):
 def skiplines(size):
     """ESC J n: flush the print buffer, then feed n pixel lines."""
     return bytes((ESC, 0x4A, size & 0xFF))
+
+
+# Vertical motion unit of ESC J at the printer's print resolution.
+FEED_DPI = 203
+
+
+def feed_lines(mm):
+    """ESC J commands for a feed length in mm (255 lines per command)."""
+    lines = int(round(mm * FEED_DPI / 25.4))
+    out = bytearray()
+    while lines > 0:
+        step = min(lines, 255)
+        out += skiplines(step)
+        lines -= step
+    return bytes(out)
 
 
 def read_pbm_header(stream):
@@ -166,7 +182,8 @@ def rasterize_rows(rows, settings):
 
     Fully blank bands are skipped (ESC J 24 per band; printed out only when
     blank_space == 0); printed bands flush with ESC J 0. Page-End feeds
-    feed_dist x ESC J 0x18, then per-page cutting when cutting == 1.
+    feed_dist x ESC J 0x18, then the extra feed length, then per-page cutting
+    when cutting == 1.
     """
     out = bytearray()
     total = len(rows)
@@ -203,6 +220,7 @@ def rasterize_rows(rows, settings):
 
     for _ in range(settings.feed_dist):
         out += skiplines(ENDPAGE_FEED)
+    out += feed_lines(settings.extra_feed_mm)
     if settings.cutting == 1:
         out += bytes((ESC, 0x69))
     return bytes(out)

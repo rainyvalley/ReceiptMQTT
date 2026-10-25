@@ -159,6 +159,19 @@ class TestRasterizeRows:
         assert not out.endswith(b"\x1bi")
         assert out.endswith(skiplines(0x18) * 2)
 
+    def test_extra_feed_mm_before_cut(self):
+        out = rasterize_rows([b"\xff" * 48],
+                             EscposSettings(feed_dist=0, cutting=1,
+                                            extra_feed_mm=10))
+        assert out.endswith(escpos.feed_lines(10) + b"\x1bi")
+        assert escpos.feed_lines(10) == skiplines(80)
+
+    def test_extra_feed_chunks_above_255_lines(self):
+        assert escpos.feed_lines(100) == skiplines(255) * 3 + skiplines(34)
+
+    def test_zero_extra_feed_adds_nothing(self):
+        assert escpos.feed_lines(0) == b""
+
     def test_feed_dist_zero(self):
         out = rasterize_rows([b"\xff" * 48], EscposSettings(feed_dist=0,
                                                            cutting=0))

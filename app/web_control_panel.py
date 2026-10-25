@@ -313,7 +313,7 @@ def test_print():
                        ), 429, {"Retry-After": str(wait)}
     try:
         apply_local_settings()
-        settings = escpos.EscposSettings.from_env()
+        settings = escpos.EscposSettings.from_env(settings_store.runtime_env())
         pbm = escpos.selftest_pbm()
         escpos_bytes, _pages = escpos.render_all(pbm, settings)
         device = current_device()

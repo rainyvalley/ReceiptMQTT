@@ -5,7 +5,7 @@ import os
 from escpos import EscposSettings
 
 PPD_DEFAULTS = dict(cash_drawer1=0, cash_drawer2=0, blank_space=1,
-                    feed_dist=2, cutting=1)
+                    feed_dist=2, cutting=1, extra_feed_mm=0)
 
 
 class TestFromEnv:
@@ -18,7 +18,7 @@ class TestFromEnv:
             "CASH_DRAWER1": "1", "CASH_DRAWER2": "2", "BLANK_SPACE": "0",
             "FEED_DIST": "5", "CUTTING": "0"})
         assert vars(s) == dict(cash_drawer1=1, cash_drawer2=2, blank_space=0,
-                               feed_dist=5, cutting=0)
+                               feed_dist=5, cutting=0, extra_feed_mm=0)
 
     def test_bad_int_falls_back_to_default(self):
         s = EscposSettings.from_env({
@@ -26,6 +26,10 @@ class TestFromEnv:
             "CUTTING": "2x"})
         # everything unparsable (or empty) keeps the PPD default
         assert vars(s) == PPD_DEFAULTS
+
+    def test_extra_feed_mm_is_read(self):
+        s = EscposSettings.from_env({"EXTRA_FEED_MM": "12"})
+        assert s.extra_feed_mm == 12
 
     def test_partial_env_keeps_other_defaults(self):
         s = EscposSettings.from_env({"FEED_DIST": "0"})

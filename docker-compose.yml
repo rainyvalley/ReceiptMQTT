@@ -30,6 +30,7 @@ services:
       # print area: 58 mm rolls print 48 mm (384 dots), 80 mm rolls print
       # 72 mm (576 dots). 80 mm has not been tested on a real printer.
       - PAPER_WIDTH_MM=${PAPER_WIDTH_MM:-48}
+      - EXTRA_FEED_MM=${EXTRA_FEED_MM:-}
       - RASTER_DPI_X=${RASTER_DPI_X:-203}
       - RASTER_DPI_Y=${RASTER_DPI_Y:-203}
       - RASTER_WIDTH_PX=${RASTER_WIDTH_PX:-}

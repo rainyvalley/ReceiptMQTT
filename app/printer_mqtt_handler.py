@@ -1083,7 +1083,7 @@ def send_raw_to_printer(escpos_bytes):
 
 def print_job(title, message):
     """Full pipeline for one MQTT message: PDF, raster, ESC/POS, device."""
-    settings = escpos.EscposSettings.from_env()
+    settings = escpos.EscposSettings.from_env(settings_store.runtime_env())
 
     fd, pdf_path = tempfile.mkstemp(prefix="print_job_", suffix=".pdf")
     os.close(fd)
