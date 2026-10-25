@@ -305,12 +305,10 @@ acl_file /etc/mosquitto/acl
 user kitchen
 topic readwrite kitchen/#
 topic write homeassistant/+/receiptmqtt_kitchen_commands/+/config
-topic read $SYS/broker/version
 
 user office
 topic readwrite office/#
 topic write homeassistant/+/receiptmqtt_office_commands/+/config
-topic read $SYS/broker/version
 
 # Home Assistant reads every printer (including discovery) and may publish
 # print jobs only
@@ -333,7 +331,9 @@ A publish the ACL denies is dropped without an error, and current Mosquitto buil
 
 Home Assistant fixes the shape of a discovery topic: it must be `<prefix>/<component>/[<node>/]<entity>/config`. A printer cannot get a flatter or separately named subtree under `homeassistant`, so a topic change would not remove that shape; the only choice is what the node segment is called and how the ACL matches it.
 
-The node follows `MQTT_TOPIC`, so changing that topic from the panel changes the ACL line it needs. Either update the ACL, or set `HA_NODE_ID` to a fixed value such as `receiptprinter2` and write `homeassistant/+/receiptmqtt_receiptprinter2/+/config` in the ACL; then topic changes never touch the ACL again.
+The node follows `MQTT_TOPIC`, so changing that topic from the panel changes the ACL line it needs. Either update the ACL, or set `HA_NODE_ID` to a fixed value such as `kitchen_commands` and write `homeassistant/+/receiptmqtt_kitchen_commands/+/config` in the ACL; then topic changes never touch the ACL again.
+
+A longer walkthrough, with the topic names, both ACL options and the checks, is in [`docs/mqtt-broker-acls.md`](./docs/mqtt-broker-acls.md).
 
 Create the three logins and restart the broker:
 
