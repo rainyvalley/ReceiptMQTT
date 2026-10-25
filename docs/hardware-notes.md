@@ -162,26 +162,7 @@ is being written. That is treated as "unknown" and the last retained value stand
 
 ### Home Assistant
 
-```yaml
-mqtt:
-  binary_sensor:
-    - name: "Receipt Printer Paper"
-      unique_id: receipt_printer_paper
-      state_topic: "printer/paper"
-      payload_on: "OFF"          # ON = a problem = out of paper
-      payload_off: "ON"
-      device_class: problem
-      availability_topic: "printer/availability"
-      payload_available: "online"
-      payload_not_available: "offline"
-
-    - name: "Receipt Printer Paper Low"
-      unique_id: receipt_printer_paper_low
-      state_topic: "printer/paper_low"
-      payload_on: "ON"           # ON = near-end sensor tripped
-      payload_off: "OFF"
-      device_class: problem
-      availability_topic: "printer/availability"
-      payload_available: "online"
-      payload_not_available: "offline"
-```
+Discovery creates the paper sensors, availability and the counters
+automatically, so no YAML is needed. See
+[Home Assistant](../README.md#home-assistant) for the entity list and the
+topic values.

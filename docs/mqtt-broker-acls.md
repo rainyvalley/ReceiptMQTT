@@ -156,5 +156,5 @@ discovery on its next reconnect.
 
 Give each printer its own login, its own topic tree and its own discovery
 line. A mistake on one then cannot print on, or silence, the other. The
-[Two printers on one machine](../README.md#two-printers-on-one-machine)
+[Two printers on two systems](../README.md#two-printers-on-two-systems)
 section has a full Compose example.

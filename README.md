@@ -118,7 +118,7 @@ Paper width, the printer device, the broker login and every MQTT topic can also 
 | `MQTT_TLS_CA` | system CAs | Path inside the container to a CA file, for a private CA. Mount it read-only. |
 | `MQTT_TLS_INSECURE` | off | Skip the broker name check. Lab use only. A warning is logged. |
 | `MQTT_TOPIC` | `printer/commands` | Topic that print jobs arrive on. |
-| `MQTT_AVAILABILITY_TOPIC` | `printer/availability` | Online/offline topic. Give each printer on one broker its own, see [Two printers on one machine](#two-printers-on-one-machine). |
+| `MQTT_AVAILABILITY_TOPIC` | `printer/availability` | Online/offline topic. Give each printer on one broker its own, see [Two printers on two systems](#two-printers-on-two-systems). |
 | `MQTT_PAPER_TOPIC`, `MQTT_PAPER_LOW_TOPIC` | `printer/paper`, `printer/paper_low` | Paper sensor topics. |
 | `MQTT_LAST_ERROR_TOPIC`, `MQTT_DROPPED_TOTAL_TOPIC`, `MQTT_FAILED_TOTAL_TOPIC` | `printer/last_error`, `printer/dropped_total`, `printer/failed_total` | Topics for [dropped and failed jobs](#dropped-and-failed-jobs). |
 
@@ -230,60 +230,58 @@ To print longer receipts, raise `RASTER_HEIGHT_PX` in `.env` (for example `1600`
 
 ---
 
-## Two printers on one machine
+## Two printers on two systems
 
-Run one container per printer. Nothing in the app is shared: each container has its own CUPS, its own web panel and its own memory limit. What must differ is the device file, the panel port and every MQTT topic, or the two printers overwrite each other's retained messages.
+Run one container per printer. The printers can be on two machines or on one;
+either way each container has its own CUPS, web panel and memory limit. They
+share a broker, so every topic must be different, or the printers read each
+other's jobs and overwrite each other's retained state.
 
-**Devices.** Two USB printers appear as `/dev/usb/lp0` and `/dev/usb/lp1`, and those numbers can swap on a reboot or a replug. Point each container at a udev symlink (for example `/dev/printer_kitchen`) instead of a number, or check the numbers after every reboot.
+**One host per printer.** Clone this repo on each machine and use the same
+`docker-compose.yml`. Only `.env` and the device mapping differ.
 
-**Compose.** Put both services in one file. Only the values that differ are listed; copy the capabilities, ulimits and restart policy from this repo's `docker-compose.yml`. Once the containers run, the panel can change each printer's topics and paper width without touching this file again.
+`.env` on the first host:
+
+```bash
+MQTT_BROKER=192.0.2.10
+MQTT_USERNAME=printer_one
+MQTT_PASSWORD=broker-password-one
+MQTT_TOPIC=printer_one/commands
+MQTT_AVAILABILITY_TOPIC=printer_one/availability
+MQTT_PAPER_TOPIC=printer_one/paper
+MQTT_PAPER_LOW_TOPIC=printer_one/paper_low
+MQTT_LAST_ERROR_TOPIC=printer_one/last_error
+MQTT_DROPPED_TOTAL_TOPIC=printer_one/dropped_total
+MQTT_FAILED_TOTAL_TOPIC=printer_one/failed_total
+PRINTER_DEVICE=/dev/usb/lp0
+PRINTER_NAME=ReceiptPrinter
+HA_DEVICE_NAME=Printer one
+ADMIN_PASS=panel-password-one
+```
+
+`.env` on the second host is the same with `printer_two` and its own
+passwords. The device can stay `/dev/usb/lp0`; the machines are separate.
+
+`docker-compose.override.yml` on each host:
 
 ```yaml
 services:
-  kitchen:
-    image: ghcr.io/rainyvalley/receiptmqtt:${IMAGE_TAG:-latest}
-    container_name: printmqttify_kitchen
-    ports: ["8080:8080"]
-    devices: ["/dev/printer_kitchen:/dev/printer_kitchen"]
-    environment:
-      PRINTER_DEVICE: /dev/printer_kitchen
-      PRINTER_NAME: Kitchen
-      MQTT_BROKER: 192.0.2.10
-      MQTT_USERNAME: kitchen
-      MQTT_PASSWORD: kitchen-broker-password
-      MQTT_TOPIC: kitchen/commands
-      MQTT_AVAILABILITY_TOPIC: kitchen/availability
-      MQTT_PAPER_TOPIC: kitchen/paper
-      MQTT_PAPER_LOW_TOPIC: kitchen/paper_low
-      MQTT_LAST_ERROR_TOPIC: kitchen/last_error
-      MQTT_DROPPED_TOTAL_TOPIC: kitchen/dropped_total
-      MQTT_FAILED_TOTAL_TOPIC: kitchen/failed_total
-      ADMIN_PASS: kitchen-panel-password
-    mem_limit: 384m
-
-  office:
-    image: ghcr.io/rainyvalley/receiptmqtt:${IMAGE_TAG:-latest}
-    container_name: printmqttify_office
-    ports: ["8081:8080"]
-    devices: ["/dev/printer_office:/dev/printer_office"]
-    environment:
-      PRINTER_DEVICE: /dev/printer_office
-      PRINTER_NAME: Office
-      MQTT_BROKER: 192.0.2.10
-      MQTT_USERNAME: office
-      MQTT_PASSWORD: office-broker-password
-      MQTT_TOPIC: office/commands
-      MQTT_AVAILABILITY_TOPIC: office/availability
-      MQTT_PAPER_TOPIC: office/paper
-      MQTT_PAPER_LOW_TOPIC: office/paper_low
-      MQTT_LAST_ERROR_TOPIC: office/last_error
-      MQTT_DROPPED_TOTAL_TOPIC: office/dropped_total
-      MQTT_FAILED_TOTAL_TOPIC: office/failed_total
-      ADMIN_PASS: office-panel-password
-    mem_limit: 384m
+  printmqttify:
+    devices: ["/dev/usb/lp0:/dev/usb/lp0"]
 ```
 
-Then `docker compose up -d` starts both. The kitchen panel is on `http://<host>:8080`, the office panel on `http://<host>:8081`.
+Both panels can use port 8080, since they are different machines. Run
+`docker compose up -d` on each host.
+
+If both printers are on one machine, put both services in one Compose file,
+give the second host port `8081:8080` and the second printer's device, and
+copy the second `.env` values into that service. The rest of this section
+still applies.
+
+Two USB printers on one machine appear as `/dev/usb/lp0` and `/dev/usb/lp1`,
+and the numbers can swap after a reboot. Point each container at a udev
+symlink (for example `/dev/printer_one`) instead of a number, or check the
+numbers after every reboot.
 
 **Broker logins and ACL.** Give each container its own broker login instead of one shared account. Mosquitto can then keep each login inside its own topic prefix, so a mistake on one printer cannot print on, or silence, the other.
 
@@ -301,18 +299,18 @@ acl_file /etc/mosquitto/acl
 # One login per printer. Each one may use its own topic tree and write only
 # its own Home Assistant discovery configs. The discovery prefix is
 # "receiptmqtt_" plus the command topic with "/" replaced by "_":
-# kitchen/commands -> receiptmqtt_kitchen_commands.
-user kitchen
-topic readwrite kitchen/#
-topic write homeassistant/+/receiptmqtt_kitchen_commands/+/config
+# printer_one/commands -> receiptmqtt_printer_one_commands.
+user printer_one
+topic readwrite printer_one/#
+topic write homeassistant/+/receiptmqtt_printer_one_commands/+/config
 
-user office
-topic readwrite office/#
-topic write homeassistant/+/receiptmqtt_office_commands/+/config
+user printer_two
+topic readwrite printer_two/#
+topic write homeassistant/+/receiptmqtt_printer_two_commands/+/config
 
 # Home Assistant reads every printer (including discovery) and may publish
 # print jobs only
-user hass
+user ha
 topic read #
 topic write +/commands
 ```
@@ -320,8 +318,8 @@ topic write +/commands
 If you do not want to compute the discovery prefix at all, one line per printer is enough, because everything that printer writes under `homeassistant` is discovery output:
 
 ```conf
-user kitchen
-topic readwrite kitchen/#
+user printer_one
+topic readwrite printer_one/#
 topic write homeassistant/+/+/+/config
 ```
 
@@ -331,22 +329,22 @@ A publish the ACL denies is dropped without an error, and current Mosquitto buil
 
 Home Assistant fixes the shape of a discovery topic: it must be `<prefix>/<component>/[<node>/]<entity>/config`. A printer cannot get a flatter or separately named subtree under `homeassistant`, so a topic change would not remove that shape; the only choice is what the node segment is called and how the ACL matches it.
 
-The node follows `MQTT_TOPIC`, so changing that topic from the panel changes the ACL line it needs. Either update the ACL, or set `HA_NODE_ID` to a fixed value such as `kitchen_commands` and write `homeassistant/+/receiptmqtt_kitchen_commands/+/config` in the ACL; then topic changes never touch the ACL again.
+The node follows `MQTT_TOPIC`, so changing that topic from the panel changes the ACL line it needs. Either update the ACL, or set `HA_NODE_ID` to a fixed value such as `printer_one_commands` and write `homeassistant/+/receiptmqtt_printer_one_commands/+/config` in the ACL; then topic changes never touch the ACL again.
 
 A longer walkthrough, with the topic names, both ACL options and the checks, is in [`docs/mqtt-broker-acls.md`](./docs/mqtt-broker-acls.md).
 
-Create the three logins and restart the broker:
+Create the three logins and reload the broker:
 
 ```bash
-sudo mosquitto_passwd -c /etc/mosquitto/passwd kitchen
-sudo mosquitto_passwd /etc/mosquitto/passwd office
-sudo mosquitto_passwd /etc/mosquitto/passwd hass
-sudo systemctl restart mosquitto
+sudo mosquitto_passwd -c /etc/mosquitto/passwd printer_one
+sudo mosquitto_passwd /etc/mosquitto/passwd printer_two
+sudo mosquitto_passwd /etc/mosquitto/passwd ha
+sudo systemctl reload mosquitto
 ```
 
 Home Assistant needs nothing per printer: discovery creates one device per command topic. Give each instance its own `HA_DEVICE_NAME` so the two devices are easy to tell apart. See [Home Assistant](#home-assistant).
 
-**Memory.** Two containers need at least 1 GB of RAM. On a board with 512 MB, run one printer per board.
+**Memory.** A container uses about 100-150 MB. One printer per 512 MB board is comfortable. If both printers share one machine, allow at least 1 GB.
 
 ---
 
@@ -440,45 +438,29 @@ The container publishes retained Home Assistant discovery configs on every MQTT 
 | Paper | problem binary sensor | `printer/paper` |
 | Paper low | problem binary sensor | `printer/paper_low` |
 | Availability | connectivity binary sensor | `printer/availability` |
-| Last error | sensor | `printer/last_error` |
+| Last error | sensor (`dropped` or `failed`, JSON attributes) | `printer/last_error` |
 | Dropped jobs | sensor, total increasing | `printer/dropped_total` |
 | Failed jobs | sensor, total increasing | `printer/failed_total` |
 
-Entity ids are derived from the command topic (`printer/commands` becomes `receiptmqtt_printer_commands_*`), so two printers with different topics on one broker do not collide. Set `HA_DEVICE_NAME` per instance to give them distinct names in Home Assistant, and `HA_NODE_ID` if you want the prefix fixed (see the ACL note under [Two printers on one machine](#two-printers-on-one-machine)). `HA_DISCOVERY=0` turns discovery off; the topics keep working and the manual YAML below still applies.
+Entity ids are derived from the command topic (`printer/commands` becomes `receiptmqtt_printer_commands_*`), so two printers with different topics on one broker do not collide. Set `HA_DEVICE_NAME` per instance to give them distinct names in Home Assistant, and `HA_NODE_ID` if you want the prefix fixed (see the ACL note under [Two printers on two systems](#two-printers-on-two-systems)). `HA_DISCOVERY=0` turns discovery off; the topics keep working and you can add the entities by hand (see [Entity ids](#entity-ids)).
 
 Renaming topics in the panel creates a new entity prefix on the next reconnect and clears the old retained availability and discovery configs, so Home Assistant does not keep showing the old entities.
 
 The startup log and the panel's settings page print the exact broker ACL line for the current prefix, for example `topic write homeassistant/+/receiptmqtt_printer_commands/+/config`.
 
-### Sensors
+### Entity ids
 
-Discovery is the easy path. If you prefer hand-written entities, or want different polarity or names, add this to `configuration.yaml` and restart. These are not editable from the UI.
+Discovery names the entities Paper, Paper low, Availability, Last error,
+Dropped jobs and Failed jobs on the printer's device. Home Assistant builds
+the entity id from the device name and the entity name, so with the default
+device name (`ReceiptPrinter`) they are `binary_sensor.receiptprinter_paper`,
+`binary_sensor.receiptprinter_paper_low` and so on. If you set
+`HA_DEVICE_NAME`, check the ids under Settings → Devices & Services and
+adjust the examples below.
 
-```yaml
-mqtt:
-  binary_sensor:
-    - name: "Receipt Printer Paper"
-      unique_id: receipt_printer_paper
-      state_topic: "printer/paper"
-      payload_on: "OFF"          # ON = a problem = out of paper
-      payload_off: "ON"
-      device_class: problem
-      availability_topic: "printer/availability"
-      payload_available: "online"
-      payload_not_available: "offline"
-
-    - name: "Receipt Printer Paper Low"
-      unique_id: receipt_printer_paper_low
-      state_topic: "printer/paper_low"
-      payload_on: "ON"           # ON = near-end sensor tripped
-      payload_off: "OFF"
-      device_class: problem
-      availability_topic: "printer/availability"
-      payload_available: "online"
-      payload_not_available: "offline"
-```
-
-Both carry `device_class: problem`, so "on" means something needs attention. The `availability_topic` makes them show as unavailable, not stale, when the container is down or the printer's device node has disappeared (for example, the USB cable was pulled).
+If you set `HA_DISCOVERY=0`, nothing is created automatically. Add MQTT
+entities yourself with the topics and payloads on this page; discovery uses
+the same values.
 
 ### Dropped and failed jobs
 
@@ -498,25 +480,7 @@ Jobs the printer never printed are published, not just logged. Topics (all retai
 - You can rename the topics with `MQTT_LAST_ERROR_TOPIC`, `MQTT_DROPPED_TOTAL_TOPIC`, `MQTT_FAILED_TOTAL_TOPIC`, `MQTT_PAPER_TOPIC` and `MQTT_PAPER_LOW_TOPIC` (see [Settings](#settings)).
 - If the broker cannot be reached, the error is logged and printing carries on.
 
-```yaml
-mqtt:
-  sensor:
-    - name: "Receipt Printer Last Error"
-      unique_id: receipt_printer_last_error
-      state_topic: "printer/last_error"
-      value_template: "{{ value_json.kind }}"
-      json_attributes_topic: "printer/last_error"
-    - name: "Receipt Printer Dropped Jobs"
-      unique_id: receipt_printer_dropped_total
-      state_topic: "printer/dropped_total"
-      state_class: total_increasing
-    - name: "Receipt Printer Failed Jobs"
-      unique_id: receipt_printer_failed_total
-      state_topic: "printer/failed_total"
-      state_class: total_increasing
-```
-
-Merge these under your existing `mqtt:` key (do not repeat it). Home Assistant does not find these sensors on its own, so add them by hand like the paper ones. An automation that triggers when `sensor.receipt_printer_failed_jobs` or `sensor.receipt_printer_dropped_jobs` goes up can notify you.
+Discovery creates Last error, Dropped jobs and Failed jobs from these topics. Last error shows `dropped` or `failed` and keeps the JSON as attributes, so an automation can read `message` or the counters. The entity ids are listed under [Entity ids](#entity-ids).
 
 ### Printing a message
 
@@ -545,6 +509,9 @@ Merge these under your existing `mqtt:` key (do not repeat it). Home Assistant d
 
 ### Notify when the paper runs out
 
+These examples use the default entity ids. If yours differ, pick the entity
+in the automation editor instead of pasting the id.
+
 Paste into a new automation via **⋮ → Edit in YAML**.
 
 ```yaml
@@ -553,7 +520,7 @@ description: ""
 mode: single
 triggers:
   - trigger: state
-    entity_id: binary_sensor.receipt_printer_paper
+    entity_id: binary_sensor.receiptprinter_paper
     to: "on"
     for:
       hours: 0
@@ -580,7 +547,7 @@ description: ""
 mode: single
 triggers:
   - trigger: state
-    entity_id: binary_sensor.receipt_printer_paper_low
+    entity_id: binary_sensor.receiptprinter_paper_low
     to: "on"
     for:
       hours: 0
@@ -588,7 +555,7 @@ triggers:
       seconds: 0
 conditions:
   - condition: state
-    entity_id: binary_sensor.receipt_printer_paper
+    entity_id: binary_sensor.receiptprinter_paper
     state: "off"
   - condition: template
     value_template: >-
@@ -627,7 +594,7 @@ description: ""
 mode: single
 triggers:
   - trigger: state
-    entity_id: binary_sensor.receipt_printer_paper
+    entity_id: binary_sensor.receiptprinter_paper
     to: unavailable
     for:
       hours: 0

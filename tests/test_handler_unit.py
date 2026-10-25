@@ -949,3 +949,10 @@ class TestSettingsReload:
         finally:
             monkeypatch.undo()
             importlib.reload(h)
+
+    def test_last_error_reports_kind_and_attributes(self, monkeypatch):
+        messages = dict(h.discovery_messages())
+        payload = next(p for t, p in messages.items()
+                       if t.endswith("/last_error/config"))
+        assert payload["value_template"] == "{{ value_json.kind }}"
+        assert payload["json_attributes_topic"] == h.last_error_topic
