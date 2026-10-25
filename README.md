@@ -319,9 +319,21 @@ topic read #
 topic write +/commands
 ```
 
+If you do not want to compute the discovery prefix at all, one line per printer is enough, because everything that printer writes under `homeassistant` is discovery output:
+
+```conf
+user kitchen
+topic readwrite kitchen/#
+topic write homeassistant/+/+/+/config
+```
+
+The trade-off: any printer login may then also write the other printer's discovery configs, so a bug or a leaked credential could add or change entities in Home Assistant. It still cannot print on, or silence, the other printer, because print and sensor topics stay inside each login's own tree. Use the longer line above if you want that separation too.
+
 A publish the ACL denies is dropped without an error, and current Mosquitto builds do not log a "Denied PUBLISH" line for it. A broken discovery ACL therefore shows up as entities that never appear, not as a message. Test by attaching a subscriber first and then letting the app reconnect.
 
-The discovery prefix follows `MQTT_TOPIC`, so changing that topic from the panel changes the ACL line it needs. Either update the ACL, or set `HA_NODE_ID` to a fixed value such as `receiptprinter2` and write `homeassistant/+/receiptmqtt_receiptprinter2/+/config` in the ACL; then topic changes never touch the ACL again.
+Home Assistant fixes the shape of a discovery topic: it must be `<prefix>/<component>/[<node>/]<entity>/config`. A printer cannot get a flatter or separately named subtree under `homeassistant`, so a topic change would not remove that shape; the only choice is what the node segment is called and how the ACL matches it.
+
+The node follows `MQTT_TOPIC`, so changing that topic from the panel changes the ACL line it needs. Either update the ACL, or set `HA_NODE_ID` to a fixed value such as `receiptprinter2` and write `homeassistant/+/receiptmqtt_receiptprinter2/+/config` in the ACL; then topic changes never touch the ACL again.
 
 Create the three logins and restart the broker:
 
