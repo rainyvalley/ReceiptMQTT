@@ -340,13 +340,21 @@ def _settings_guard():
 @app.route('/settings')
 @require_auth
 def get_settings():
-    """Current values plus which fields the environment overrides."""
-    apply_local_settings()
-    return jsonify({"settings": settings_store.effective(),
+    """Current values, environment locks, and the discovery ACL hint."""
+    config = apply_local_settings()
+    node = f"receiptmqtt_{handler.discovery_node(config['MQTT_TOPIC'])}"
+    return jsonify({"settings": config,
                     "locked": settings_store.locked(),
                     "file": settings_store.SETTINGS_FILE,
                     "paper_width_mm": escpos.PAPER_WIDTH_MM,
-                    "print_area_mm": escpos.PRINT_AREA_MM})
+                    "print_area_mm": escpos.PRINT_AREA_MM,
+                    "discovery": {
+                        "enabled": handler.HA_DISCOVERY,
+                        "prefix": handler.HA_DISCOVERY_PREFIX,
+                        "node": node,
+                        "acl": (f"topic write {handler.HA_DISCOVERY_PREFIX}/+/"
+                                f"{node}/+/config"),
+                    }})
 
 
 @app.route('/settings', methods=['POST'])

@@ -171,6 +171,7 @@ A number that is not a whole number, or is too small, is ignored and the default
 | `HA_DISCOVERY` | on | Publish retained discovery configs so Home Assistant creates the device and its sensors. See [Discovery](#discovery-automatic-entities). |
 | `HA_DISCOVERY_PREFIX` | `homeassistant` | Discovery topic prefix. Change only if your Home Assistant uses another one. |
 | `HA_DEVICE_NAME` | `PRINTER_NAME` | Name of the device in Home Assistant. Set it per instance when two printers share a broker. |
+| `HA_NODE_ID` | derived from `MQTT_TOPIC` | Fixed discovery entity prefix. Set it so broker ACLs stay valid when the command topic changes. |
 
 ### Settings in the panel
 
@@ -180,7 +181,7 @@ The panel can change these values, so a plain `docker run` install does not need
 - MQTT broker, username and password
 - every MQTT topic: commands, availability, paper, paper low, last error, dropped total, failed total
 
-Paper width and the device take effect on the next print. A broker, login or topic change reconnects within a couple of seconds; the log says `Settings changed: ...`. Home Assistant discovery is republished on that reconnect.
+Paper width and the device take effect on the next print. A broker, login or topic change reconnects within a couple of seconds; the log says `Settings changed: ...`. Home Assistant discovery is republished on that reconnect. If your broker ACL names the discovery prefix, remember that changing the command topic changes it too, unless `HA_NODE_ID` is set.
 
 Values are stored in `/app/data/settings.json` inside the container. `docker-compose.yml` mounts a named volume there, so they survive `docker compose up -d` and `docker compose down`; `docker compose down -v` removes them. Without Compose, mount a directory at `/app/data` yourself.
 
@@ -297,14 +298,30 @@ acl_file /etc/mosquitto/acl
 `/etc/mosquitto/acl`:
 
 ```conf
-# %u is the login name: kitchen may only use kitchen/#, office only office/#
-pattern readwrite %u/#
+# One login per printer. Each one may use its own topic tree and write only
+# its own Home Assistant discovery configs. The discovery prefix is
+# "receiptmqtt_" plus the command topic with "/" replaced by "_":
+# kitchen/commands -> receiptmqtt_kitchen_commands.
+user kitchen
+topic readwrite kitchen/#
+topic write homeassistant/+/receiptmqtt_kitchen_commands/+/config
+topic read $SYS/broker/version
 
-# Home Assistant reads every printer and may publish print jobs only
+user office
+topic readwrite office/#
+topic write homeassistant/+/receiptmqtt_office_commands/+/config
+topic read $SYS/broker/version
+
+# Home Assistant reads every printer (including discovery) and may publish
+# print jobs only
 user hass
 topic read #
 topic write +/commands
 ```
+
+A publish the ACL denies is dropped without an error, and current Mosquitto builds do not log a "Denied PUBLISH" line for it. A broken discovery ACL therefore shows up as entities that never appear, not as a message. Test by attaching a subscriber first and then letting the app reconnect.
+
+The discovery prefix follows `MQTT_TOPIC`, so changing that topic from the panel changes the ACL line it needs. Either update the ACL, or set `HA_NODE_ID` to a fixed value such as `receiptprinter2` and write `homeassistant/+/receiptmqtt_receiptprinter2/+/config` in the ACL; then topic changes never touch the ACL again.
 
 Create the three logins and restart the broker:
 
@@ -415,9 +432,11 @@ The container publishes retained Home Assistant discovery configs on every MQTT 
 | Dropped jobs | sensor, total increasing | `printer/dropped_total` |
 | Failed jobs | sensor, total increasing | `printer/failed_total` |
 
-Entity ids are derived from the command topic (`printer/commands` becomes `receiptmqtt_printer_commands_*`), so two printers with different topics on one broker do not collide. Set `HA_DEVICE_NAME` per instance to give them distinct names in Home Assistant. `HA_DISCOVERY=0` turns discovery off; the topics keep working and the manual YAML below still applies.
+Entity ids are derived from the command topic (`printer/commands` becomes `receiptmqtt_printer_commands_*`), so two printers with different topics on one broker do not collide. Set `HA_DEVICE_NAME` per instance to give them distinct names in Home Assistant, and `HA_NODE_ID` if you want the prefix fixed (see the ACL note under [Two printers on one machine](#two-printers-on-one-machine)). `HA_DISCOVERY=0` turns discovery off; the topics keep working and the manual YAML below still applies.
 
 Renaming topics in the panel creates a new entity prefix on the next reconnect and clears the old retained availability and discovery configs, so Home Assistant does not keep showing the old entities.
+
+The startup log and the panel's settings page print the exact broker ACL line for the current prefix, for example `topic write homeassistant/+/receiptmqtt_printer_commands/+/config`.
 
 ### Sensors
 

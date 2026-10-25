@@ -484,3 +484,29 @@ class TestPublishTestMessage:
                     "MQTT_USERNAME": "", "MQTT_PASSWORD": ""},
             payload="job")
         assert "auth" not in events
+
+
+class TestDiscoveryInfo:
+    @pytest.fixture
+    def settings_file(self, tmp_path, monkeypatch):
+        path = tmp_path / "settings.json"
+        monkeypatch.setattr(w.settings_store, "SETTINGS_FILE", str(path))
+        for key in w.settings_store.KEYS:
+            monkeypatch.delenv(key, raising=False)
+        before = escpos.PAPER_WIDTH_MM
+        yield path
+        escpos.apply_paper_width(before)
+
+    def test_reports_node_and_acl(self, client, settings_file):
+        body = json.loads(client.get("/settings", headers=auth_pair()).data)
+        assert body["discovery"]["enabled"] is True
+        assert body["discovery"]["node"] == "receiptmqtt_printer_commands"
+        assert body["discovery"]["acl"] == (
+            "topic write homeassistant/+/receiptmqtt_printer_commands/+/config")
+
+    def test_node_follows_a_topic_change(self, client, settings_file):
+        client.post("/settings", headers=post_pair(),
+                    data={"MQTT_TOPIC": "kitchen/commands"})
+        body = json.loads(client.get("/settings", headers=auth_pair()).data)
+        assert body["discovery"]["node"] == "receiptmqtt_kitchen_commands"
+        assert "receiptmqtt_kitchen_commands" in body["discovery"]["acl"]

@@ -58,6 +58,7 @@ services:
       - HA_DISCOVERY=${HA_DISCOVERY:-1}
       - HA_DISCOVERY_PREFIX=${HA_DISCOVERY_PREFIX:-homeassistant}
       - HA_DEVICE_NAME=${HA_DEVICE_NAME:-}
+      - HA_NODE_ID=${HA_NODE_ID:-}
       - WEB_BIND=${WEB_BIND:-}
       # HTTPS for the panel: set both (paths inside the container) and mount
       # the files, see README "Turn on HTTPS". Empty means plain HTTP.

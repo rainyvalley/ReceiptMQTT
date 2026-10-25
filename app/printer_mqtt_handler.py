@@ -84,16 +84,22 @@ HA_DISCOVERY = _env_bool("HA_DISCOVERY", True)
 HA_DISCOVERY_PREFIX = (os.getenv("HA_DISCOVERY_PREFIX") or "homeassistant").strip("/")
 HA_DEVICE_NAME = (os.getenv("HA_DEVICE_NAME") or os.getenv("PRINTER_NAME")
                   or "ReceiptPrinter")
+# Optional fixed entity prefix. Pinning it keeps broker ACLs valid when the
+# command topic is changed from the panel; by default it follows the topic.
+HA_NODE_ID = (os.getenv("HA_NODE_ID") or "").strip()
 
 
 def discovery_node(topic_value=None):
-    """Stable entity prefix for this instance, derived from its command topic.
+    """Entity prefix for this instance: HA_NODE_ID, else the command topic.
 
     Two printers on one broker should use different command topics (see the
     README), which keeps their discovery entries apart.
     """
-    value = (topic if topic_value is None else topic_value).lower()
-    return re.sub(r"[^a-z0-9]+", "_", value).strip("_") or "printer"
+    if HA_NODE_ID:
+        value = HA_NODE_ID
+    else:
+        value = topic if topic_value is None else topic_value
+    return re.sub(r"[^a-z0-9]+", "_", value.lower()).strip("_") or "printer"
 
 
 def discovery_topics(node=None):
@@ -229,7 +235,9 @@ def apply_runtime_settings(env=None, client=None):
                 stale = []
                 if key == "MQTT_AVAILABILITY_TOPIC":
                     stale.append(globals()[name])
-                if key == "MQTT_TOPIC":
+                if (key == "MQTT_TOPIC"
+                        and discovery_node(globals()[name])
+                        != discovery_node(config[key])):
                     stale.extend(discovery_topics())
                 for stale_topic in stale:
                     try:
@@ -1106,6 +1114,11 @@ if __name__ == "__main__":
 
     for line in startup_warnings():
         print(line)
+    if HA_DISCOVERY:
+        prefix = f"receiptmqtt_{discovery_node()}"
+        print(f"Home Assistant discovery prefix: {prefix} "
+              f"(broker ACL needs: topic write {HA_DISCOVERY_PREFIX}/+/"
+              f"{prefix}/+/config)")
     if username and password:
         client.username_pw_set(username, password)
     configure_tls(client)

@@ -83,6 +83,7 @@
         <button type="submit">Save settings</button>
     </form>
     <pre id="settings-output"></pre>
+    <p id="discovery-line"></p>
 
     <h2>Status</h2>
     <button id="status-btn">Check Status</button>
@@ -126,6 +127,14 @@
                     const note = document.querySelector(
                         '.locked-note[data-key="' + key + '"]');
                     if (note) note.textContent = locked ? 'set in the environment' : '';
+                }
+                const discovery = document.getElementById('discovery-line');
+                if (data.discovery && data.discovery.enabled) {
+                    discovery.textContent = 'Home Assistant discovery node: '
+                        + data.discovery.node + '. Broker ACL: '
+                        + data.discovery.acl;
+                } else if (data.discovery) {
+                    discovery.textContent = 'Home Assistant discovery is off (HA_DISCOVERY=0).';
                 }
                 output.textContent = '';
             } catch (err) {

@@ -919,3 +919,33 @@ class TestSettingsReload:
         finally:
             monkeypatch.undo()
             importlib.reload(h)
+
+    def test_node_id_can_be_pinned(self, monkeypatch):
+        monkeypatch.setattr(h, "HA_NODE_ID", "receiptprinter2")
+        monkeypatch.setattr(h, "topic", "kitchen/commands")
+        assert h.discovery_node() == "receiptprinter2"
+        assert h.discovery_node("office/commands") == "receiptprinter2"
+        assert all("receiptmqtt_receiptprinter2/" in topic
+                   for topic, _payload in h.discovery_messages())
+
+    def test_pinned_node_does_not_clear_discovery_on_topic_change(
+            self, monkeypatch, tmp_path):
+        import importlib
+        path = tmp_path / "settings.json"
+        monkeypatch.setattr(h, "HA_NODE_ID", "receiptprinter2")
+        monkeypatch.setattr(h, "topic", "kitchen/commands")
+        monkeypatch.setattr(h.settings_store, "SETTINGS_FILE", str(path))
+        published = []
+
+        class Client:
+            def publish(self, topic, payload, qos=0, retain=False):
+                published.append(topic)
+
+        try:
+            h.settings_store.save({"MQTT_TOPIC": "office/commands"}, path)
+            h.apply_runtime_settings(env={}, client=Client())
+            assert h.topic == "office/commands"
+            assert not any(t.startswith("homeassistant/") for t in published)
+        finally:
+            monkeypatch.undo()
+            importlib.reload(h)
