@@ -9,8 +9,80 @@
     <h1>PrintMQTTify Control Panel</h1>
 
     <p>MQTT topic: <code>{{ mqtt_topic }}</code></p>
-    <p>Configuration is set through container environment variables.
-       See the README and <code>docs/hardware-notes.md</code>.</p>
+
+    <h2>Settings</h2>
+    <p>Fields marked "set in the environment" come from Compose or <code>.env</code>
+       and cannot be changed here. Paper width and printer device apply to the
+       next print; a broker or login change reconnects within a few seconds.</p>
+    <form id="settings-form">
+        <p>
+            <label for="PAPER_WIDTH_MM">Paper width (mm)</label>
+            <select id="PAPER_WIDTH_MM" name="PAPER_WIDTH_MM">
+                <option value="48">48 (prints 48 mm)</option>
+                <option value="58">58 (prints 48 mm)</option>
+                <option value="80">80 (prints 72 mm)</option>
+            </select>
+            <span class="locked-note" data-key="PAPER_WIDTH_MM"></span>
+        </p>
+        <p>
+            <label for="PRINTER_DEVICE">Printer device</label>
+            <input id="PRINTER_DEVICE" name="PRINTER_DEVICE" size="28">
+            <span class="locked-note" data-key="PRINTER_DEVICE"></span>
+        </p>
+        <p>
+            <label for="MQTT_BROKER">MQTT broker</label>
+            <input id="MQTT_BROKER" name="MQTT_BROKER" size="28">
+            <span class="locked-note" data-key="MQTT_BROKER"></span>
+        </p>
+        <p>
+            <label for="MQTT_USERNAME">MQTT username</label>
+            <input id="MQTT_USERNAME" name="MQTT_USERNAME" size="28">
+            <span class="locked-note" data-key="MQTT_USERNAME"></span>
+        </p>
+        <p>
+            <label for="MQTT_PASSWORD">MQTT password</label>
+            <input id="MQTT_PASSWORD" name="MQTT_PASSWORD" type="password" size="28">
+            <span class="locked-note" data-key="MQTT_PASSWORD"></span>
+        </p>
+        <h3>MQTT topics</h3>
+        <p>
+            <label for="MQTT_TOPIC">Print jobs</label>
+            <input id="MQTT_TOPIC" name="MQTT_TOPIC" size="28">
+            <span class="locked-note" data-key="MQTT_TOPIC"></span>
+        </p>
+        <p>
+            <label for="MQTT_AVAILABILITY_TOPIC">Availability</label>
+            <input id="MQTT_AVAILABILITY_TOPIC" name="MQTT_AVAILABILITY_TOPIC" size="28">
+            <span class="locked-note" data-key="MQTT_AVAILABILITY_TOPIC"></span>
+        </p>
+        <p>
+            <label for="MQTT_PAPER_TOPIC">Paper</label>
+            <input id="MQTT_PAPER_TOPIC" name="MQTT_PAPER_TOPIC" size="28">
+            <span class="locked-note" data-key="MQTT_PAPER_TOPIC"></span>
+        </p>
+        <p>
+            <label for="MQTT_PAPER_LOW_TOPIC">Paper low</label>
+            <input id="MQTT_PAPER_LOW_TOPIC" name="MQTT_PAPER_LOW_TOPIC" size="28">
+            <span class="locked-note" data-key="MQTT_PAPER_LOW_TOPIC"></span>
+        </p>
+        <p>
+            <label for="MQTT_LAST_ERROR_TOPIC">Last error</label>
+            <input id="MQTT_LAST_ERROR_TOPIC" name="MQTT_LAST_ERROR_TOPIC" size="28">
+            <span class="locked-note" data-key="MQTT_LAST_ERROR_TOPIC"></span>
+        </p>
+        <p>
+            <label for="MQTT_DROPPED_TOTAL_TOPIC">Dropped total</label>
+            <input id="MQTT_DROPPED_TOTAL_TOPIC" name="MQTT_DROPPED_TOTAL_TOPIC" size="28">
+            <span class="locked-note" data-key="MQTT_DROPPED_TOTAL_TOPIC"></span>
+        </p>
+        <p>
+            <label for="MQTT_FAILED_TOTAL_TOPIC">Failed total</label>
+            <input id="MQTT_FAILED_TOTAL_TOPIC" name="MQTT_FAILED_TOTAL_TOPIC" size="28">
+            <span class="locked-note" data-key="MQTT_FAILED_TOTAL_TOPIC"></span>
+        </p>
+        <button type="submit">Save settings</button>
+    </form>
+    <pre id="settings-output"></pre>
 
     <h2>Status</h2>
     <button id="status-btn">Check Status</button>
@@ -21,11 +93,97 @@
         <button type="submit">Send Test Print</button>
     </form>
 
+    <h2>Test Message</h2>
+    <p>Publishes one job through the broker, so it prints a receipt and shows
+       that the MQTT login, topic and network path work.</p>
+    <form id="test-message-form">
+        <button type="submit">Send Test Message</button>
+    </form>
+
     <script>
+        const SETTING_KEYS = ['PAPER_WIDTH_MM', 'PRINTER_DEVICE', 'MQTT_BROKER',
+                              'MQTT_USERNAME', 'MQTT_PASSWORD',
+                              'MQTT_TOPIC', 'MQTT_AVAILABILITY_TOPIC',
+                              'MQTT_PAPER_TOPIC', 'MQTT_PAPER_LOW_TOPIC',
+                              'MQTT_LAST_ERROR_TOPIC', 'MQTT_DROPPED_TOTAL_TOPIC',
+                              'MQTT_FAILED_TOTAL_TOPIC'];
+
+        async function loadSettings() {
+            const output = document.getElementById('settings-output');
+            try {
+                const response = await fetch('/settings');
+                if (!response.ok) {
+                    output.textContent = 'Could not read settings: HTTP ' + response.status;
+                    return;
+                }
+                const data = await response.json();
+                for (const key of SETTING_KEYS) {
+                    const field = document.getElementById(key);
+                    if (!field) continue;
+                    field.value = data.settings[key] ?? '';
+                    const locked = Boolean(data.locked[key]);
+                    field.disabled = locked;
+                    const note = document.querySelector(
+                        '.locked-note[data-key="' + key + '"]');
+                    if (note) note.textContent = locked ? 'set in the environment' : '';
+                }
+                output.textContent = '';
+            } catch (err) {
+                output.textContent = 'Could not reach the panel.';
+            }
+        }
+
+        document.getElementById('settings-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const output = document.getElementById('settings-output');
+            const body = new FormData(document.getElementById('settings-form'));
+            try {
+                const response = await fetch('/settings', {
+                    method: 'POST',
+                    headers: { 'X-Requested-With': 'PrintMQTTify' },
+                    body: body
+                });
+                let data = {};
+                try { data = await response.json(); } catch (err) { /* not JSON */ }
+                if (data.saved) {
+                    output.textContent = 'Saved.' +
+                        (data.ignored_locked && data.ignored_locked.length
+                            ? ' Ignored (environment): ' + data.ignored_locked.join(', ')
+                            : '');
+                    await loadSettings();
+                } else {
+                    output.textContent = 'Not saved: ' +
+                        ((data.errors && data.errors.join('; '))
+                            || data.error || ('HTTP ' + response.status));
+                }
+            } catch (err) {
+                output.textContent = 'Not saved: could not reach the panel.';
+            }
+        });
+
         document.getElementById('status-btn').addEventListener('click', async () => {
             const response = await fetch('/status');
             const data = await response.json();
             document.getElementById('status-output').textContent = JSON.stringify(data, null, 2);
+        });
+
+        document.getElementById('test-message-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            let message;
+            try {
+                const response = await fetch('/test-message', {
+                    method: 'POST',
+                    headers: { 'X-Requested-With': 'PrintMQTTify' }
+                });
+                let data = {};
+                try { data = await response.json(); } catch (err) { /* not JSON */ }
+                message = data.success
+                    ? 'Test message sent: ' + (data.output || 'ok')
+                    : 'Test message failed: ' + (data.error || ('HTTP ' + response.status));
+            } catch (err) {
+                message = 'Test message failed: could not reach the panel.';
+            }
+            alert(message);
         });
 
         document.getElementById('test-print-form').addEventListener('submit', async (e) => {
@@ -46,6 +204,8 @@
             }
             alert(message);
         });
+
+        loadSettings();
     </script>
 </body>
 </html>

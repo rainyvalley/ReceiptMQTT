@@ -6,6 +6,9 @@ services:
       # Host address the panel is published on. Default (all interfaces) is
       # unchanged; set WEB_PUBLISH_BIND=127.0.0.1 in .env for local-only.
       - "${WEB_PUBLISH_BIND:-0.0.0.0}:8080:8080"
+    # Settings saved from the panel live here, so they survive re-creation.
+    volumes:
+      - printmqttify_data:/app/data
     # USB device mapping lives in docker-compose.override.yml per host;
     # never pin a /dev/bus/usb/NNN/NNN path here (renumbering broke
     # printing for ten days once).
@@ -49,6 +52,12 @@ services:
       - MQTT_LAST_ERROR_TOPIC=${MQTT_LAST_ERROR_TOPIC:-printer/last_error}
       - MQTT_DROPPED_TOTAL_TOPIC=${MQTT_DROPPED_TOTAL_TOPIC:-printer/dropped_total}
       - MQTT_FAILED_TOTAL_TOPIC=${MQTT_FAILED_TOTAL_TOPIC:-printer/failed_total}
+      # Home Assistant MQTT discovery: the device and its sensors are created
+      # on their own. HA_DISCOVERY=0 turns it off; HA_DEVICE_NAME names the
+      # device (defaults to PRINTER_NAME).
+      - HA_DISCOVERY=${HA_DISCOVERY:-1}
+      - HA_DISCOVERY_PREFIX=${HA_DISCOVERY_PREFIX:-homeassistant}
+      - HA_DEVICE_NAME=${HA_DEVICE_NAME:-}
       - WEB_BIND=${WEB_BIND:-}
       # HTTPS for the panel: set both (paths inside the container) and mount
       # the files, see README "Turn on HTTPS". Empty means plain HTTP.
@@ -88,3 +97,6 @@ services:
     # An unreachable broker at boot is retried with backoff and mid-run
     # outages reconnect on their own; restart covers any other crash.
     restart: unless-stopped
+
+volumes:
+  printmqttify_data:

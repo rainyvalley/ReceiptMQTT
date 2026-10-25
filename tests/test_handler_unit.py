@@ -790,3 +790,132 @@ class TestFloodStaysResponsive:
         h.on_message(None, None, FakeMsg(raw))
         h.flush_jobs()
         h.shutdown_worker()
+
+
+# ---------------------------------------------------------- HA discovery
+
+class TestDiscovery:
+    def _messages(self, monkeypatch):
+        monkeypatch.setattr(h, "topic", "kitchen/commands")
+        monkeypatch.setattr(h, "HA_DISCOVERY_PREFIX", "homeassistant")
+        return dict(h.discovery_messages())
+
+    def test_every_published_value_has_an_entity(self, monkeypatch):
+        messages = self._messages(monkeypatch)
+        assert len(messages) == 6
+        node = h.discovery_node()
+        assert node == "kitchen_commands"
+        for key in ("availability", "paper", "paper_low", "last_error",
+                    "dropped_total", "failed_total"):
+            assert any(t.endswith(f"/{key}/config") for t in messages)
+        for payload in messages.values():
+            assert payload["unique_id"].startswith(f"receiptmqtt_{node}_")
+            assert payload["device"]["identifiers"] == [f"receiptmqtt_{node}"]
+
+    def test_state_topics_match_the_app_topics(self, monkeypatch):
+        messages = self._messages(monkeypatch)
+        by_suffix = {t.rsplit("/", 2)[-2]: p for t, p in messages.items()}
+        assert by_suffix["paper"]["state_topic"] == h.paper_topic
+        assert by_suffix["paper_low"]["state_topic"] == h.paper_low_topic
+        assert by_suffix["last_error"]["state_topic"] == h.last_error_topic
+        assert by_suffix["dropped_total"]["state_topic"] == h.dropped_total_topic
+        assert by_suffix["failed_total"]["state_topic"] == h.failed_total_topic
+        assert by_suffix["availability"]["state_topic"] == h.availability_topic
+
+    def test_availability_entity_can_report_offline(self, monkeypatch):
+        messages = self._messages(monkeypatch)
+        payload = next(p for t, p in messages.items()
+                       if t.endswith("/availability/config"))
+        # Using itself as availability would hide "offline" behind
+        # Home Assistant's own "unavailable".
+        assert "availability" not in payload
+        assert payload["payload_on"] == "online"
+        assert payload["payload_off"] == "offline"
+
+    def test_connect_publishes_retained_configs(self, monkeypatch):
+        published = []
+        client = FakeClient()
+        client.publish = lambda *a, **k: published.append((a, k))
+        monkeypatch.setattr(h, "AVAILABILITY_THREAD",
+                            types.SimpleNamespace(is_alive=lambda: True))
+        h.on_connect(client, None, None, 0)
+        configs = [(a, k) for a, k in published
+                   if a[0].startswith(h.HA_DISCOVERY_PREFIX + "/")]
+        assert len(configs) == 6
+        assert all(k.get("retain") is True for _a, k in configs)
+
+    def test_discovery_can_be_disabled(self, monkeypatch):
+        published = []
+        client = FakeClient()
+        client.publish = lambda *a, **k: published.append(a)
+        monkeypatch.setattr(h, "HA_DISCOVERY", False)
+        monkeypatch.setattr(h, "AVAILABILITY_THREAD",
+                            types.SimpleNamespace(is_alive=lambda: True))
+        h.on_connect(client, None, None, 0)
+        assert not any(a[0].startswith("homeassistant/") for a in published)
+
+
+class TestSettingsReload:
+    def test_panel_values_update_topic_and_paper(self, monkeypatch, tmp_path):
+        import importlib
+        path = tmp_path / "settings.json"
+        monkeypatch.setattr(h.settings_store, "SETTINGS_FILE", str(path))
+        for key in ("MQTT_TOPIC", "MQTT_AVAILABILITY_TOPIC", "PAPER_WIDTH_MM",
+                    "PRINTER_DEVICE"):
+            monkeypatch.delenv(key, raising=False)
+        h.settings_store.save({"MQTT_TOPIC": "kitchen/commands",
+                               "MQTT_AVAILABILITY_TOPIC": "kitchen/availability",
+                               "PAPER_WIDTH_MM": "58",
+                               "PRINTER_DEVICE": "/dev/usb/lp9"}, path)
+        try:
+            changed = h.apply_runtime_settings(env={})
+            assert {"MQTT_TOPIC", "MQTT_AVAILABILITY_TOPIC", "PAPER_WIDTH_MM",
+                    "PRINTER_DEVICE"} <= set(changed)
+            assert h.topic == "kitchen/commands"
+            assert h.availability_topic == "kitchen/availability"
+            assert h.printer_device == "/dev/usb/lp9"
+            assert escpos.PAPER_WIDTH_MM == 58
+            assert h.discovery_node() == "kitchen_commands"
+        finally:
+            monkeypatch.undo()
+            importlib.reload(h)
+
+    def test_environment_still_wins_on_reload(self, monkeypatch, tmp_path):
+        import importlib
+        path = tmp_path / "settings.json"
+        monkeypatch.setattr(h.settings_store, "SETTINGS_FILE", str(path))
+        h.settings_store.save({"MQTT_TOPIC": "panel/commands"}, path)
+        try:
+            h.apply_runtime_settings(env={"MQTT_TOPIC": "env/commands"})
+            assert h.topic == "env/commands"
+        finally:
+            monkeypatch.undo()
+            importlib.reload(h)
+
+    def test_topic_change_clears_stale_retained_topics(self, monkeypatch,
+                                                       tmp_path):
+        import importlib
+        path = tmp_path / "settings.json"
+        monkeypatch.setattr(h.settings_store, "SETTINGS_FILE", str(path))
+        monkeypatch.setattr(h, "topic", "printer/commands")
+        monkeypatch.setattr(h, "availability_topic", "printer/availability")
+        published = []
+
+        class Client:
+            def publish(self, topic, payload, qos=0, retain=False):
+                published.append((topic, payload, retain))
+
+        try:
+            h.settings_store.save({"MQTT_TOPIC": "kitchen/commands",
+                                   "MQTT_AVAILABILITY_TOPIC": "kitchen/availability"},
+                                  path)
+            h.apply_runtime_settings(env={}, client=Client())
+            cleared = [t for t, payload, retain in published if retain]
+            assert "printer/availability" in cleared
+            assert "homeassistant/binary_sensor/receiptmqtt_printer_commands/paper/config" in cleared
+            assert "homeassistant/sensor/receiptmqtt_printer_commands/last_error/config" in cleared
+            assert all(payload == b"" for topic, payload, retain in published
+                       if retain and "printer_commands" in topic)
+        finally:
+            monkeypatch.undo()
+            importlib.reload(h)

@@ -9,7 +9,8 @@ It works with Zijiang **ZJ-58**, the widely sold **POS58**, and clones that spea
 - A listener on one MQTT topic (default `printer/commands`). Each JSON message prints one receipt.
 - Paper and paper-low state, and printer availability, published to MQTT for Home Assistant.
 - A list of dropped and failed jobs, published to MQTT.
-- A small web control panel on port 8080 (always on) with a status check and a **Send Test Print** button.
+- A small web control panel on port 8080 (always on) with a status check, a **Send Test Print** button, a **Send Test Message** button and a settings form.
+- Home Assistant MQTT discovery: the printer and its sensors appear on their own.
 
 What it does not do yet:
 
@@ -104,6 +105,8 @@ Put the settings in `.env` as above, not on the command line, so they stay out o
 
 Set these in `.env`. Compose passes them on. A setting that is missing or empty uses its default.
 
+Paper width, the printer device, the broker login and every MQTT topic can also be changed from the web panel, without restarting. Environment variables always win: a variable set in `.env` or Compose is shown read-only in the panel. See [Settings in the panel](#settings-in-the-panel).
+
 **Broker**
 
 | Variable | Default | Meaning |
@@ -161,6 +164,32 @@ A number that is not a whole number, or is too small, is ignored and the default
 |---|---|---|
 | `MEM_LIMIT` | `512m` | Memory ceiling for the container. Lower it to `384m` on a board with 512 MB of RAM or less. |
 
+**Home Assistant**
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `HA_DISCOVERY` | on | Publish retained discovery configs so Home Assistant creates the device and its sensors. See [Discovery](#discovery-automatic-entities). |
+| `HA_DISCOVERY_PREFIX` | `homeassistant` | Discovery topic prefix. Change only if your Home Assistant uses another one. |
+| `HA_DEVICE_NAME` | `PRINTER_NAME` | Name of the device in Home Assistant. Set it per instance when two printers share a broker. |
+
+### Settings in the panel
+
+The panel can change these values, so a plain `docker run` install does not need a `.env` at all:
+
+- paper width, printer device
+- MQTT broker, username and password
+- every MQTT topic: commands, availability, paper, paper low, last error, dropped total, failed total
+
+Paper width and the device take effect on the next print. A broker, login or topic change reconnects within a couple of seconds; the log says `Settings changed: ...`. Home Assistant discovery is republished on that reconnect.
+
+Values are stored in `/app/data/settings.json` inside the container. `docker-compose.yml` mounts a named volume there, so they survive `docker compose up -d` and `docker compose down`; `docker compose down -v` removes them. Without Compose, mount a directory at `/app/data` yourself.
+
+**The environment always wins.** If a variable is set and not empty in Compose or `.env`, the panel shows that field as "set in the environment" and cannot change it. That keeps an existing `.env` authoritative while the panel fills in everything else.
+
+The saved file contains the MQTT password and is written mode 600, readable only by the app user. The panel shows it to the logged-in admin, like every other setting, so keep the panel on localhost or behind HTTPS. There is no separate panel password for settings; it uses `ADMIN_USER` / `ADMIN_PASS`.
+
+**Send Test Message** in the panel publishes one print job through the broker, so it exercises the login, the topic and the network path, not just the device.
+
 ### How jobs are handled
 
 - Jobs print one at a time, in the order they arrive. A slow print never stalls the MQTT connection.
@@ -170,7 +199,7 @@ A number that is not a whole number, or is too small, is ignored and the default
 
 ### Paper width
 
-Set **`PAPER_WIDTH_MM`** in `.env` (or in `docker-compose.yml`) and restart the container:
+Set **`PAPER_WIDTH_MM`** in `.env` (or in `docker-compose.yml`) and restart the container, or change it in the panel and print again:
 
 ```
 PAPER_WIDTH_MM=80
@@ -206,7 +235,7 @@ Run one container per printer. Nothing in the app is shared: each container has 
 
 **Devices.** Two USB printers appear as `/dev/usb/lp0` and `/dev/usb/lp1`, and those numbers can swap on a reboot or a replug. Point each container at a udev symlink (for example `/dev/printer_kitchen`) instead of a number, or check the numbers after every reboot.
 
-**Compose.** Put both services in one file. Only the values that differ are listed; copy the capabilities, ulimits and restart policy from this repo's `docker-compose.yml`.
+**Compose.** Put both services in one file. Only the values that differ are listed; copy the capabilities, ulimits and restart policy from this repo's `docker-compose.yml`. Once the containers run, the panel can change each printer's topics and paper width without touching this file again.
 
 ```yaml
 services:
@@ -286,7 +315,7 @@ sudo mosquitto_passwd /etc/mosquitto/passwd hass
 sudo systemctl restart mosquitto
 ```
 
-Home Assistant then needs one MQTT device per printer, with each prefix in its entity topics. See [Home Assistant](#home-assistant).
+Home Assistant needs nothing per printer: discovery creates one device per command topic. Give each instance its own `HA_DEVICE_NAME` so the two devices are easy to tell apart. See [Home Assistant](#home-assistant).
 
 **Memory.** Two containers need at least 1 GB of RAM. On a board with 512 MB, run one printer per board.
 
@@ -373,9 +402,26 @@ The printer is asked about paper every 60 seconds. When it does not answer, the 
 
 ## Home Assistant
 
+### Discovery (automatic entities)
+
+The container publishes retained Home Assistant discovery configs on every MQTT connect, so the printer appears as one device with these entities, with no YAML:
+
+| Entity | Type | Source topic |
+|---|---|---|
+| Paper | problem binary sensor | `printer/paper` |
+| Paper low | problem binary sensor | `printer/paper_low` |
+| Availability | connectivity binary sensor | `printer/availability` |
+| Last error | sensor | `printer/last_error` |
+| Dropped jobs | sensor, total increasing | `printer/dropped_total` |
+| Failed jobs | sensor, total increasing | `printer/failed_total` |
+
+Entity ids are derived from the command topic (`printer/commands` becomes `receiptmqtt_printer_commands_*`), so two printers with different topics on one broker do not collide. Set `HA_DEVICE_NAME` per instance to give them distinct names in Home Assistant. `HA_DISCOVERY=0` turns discovery off; the topics keep working and the manual YAML below still applies.
+
+Renaming topics in the panel creates a new entity prefix on the next reconnect and clears the old retained availability and discovery configs, so Home Assistant does not keep showing the old entities.
+
 ### Sensors
 
-Add to `configuration.yaml` and restart. These are not editable from the UI.
+Discovery is the easy path. If you prefer hand-written entities, or want different polarity or names, add this to `configuration.yaml` and restart. These are not editable from the UI.
 
 ```yaml
 mqtt:

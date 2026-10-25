@@ -54,8 +54,17 @@ def paper_width_mm(env=None):
     return mm
 
 
+def apply_paper_width(mm):
+    """Make one paper profile active (startup and panel changes use this)."""
+    global PAPER_WIDTH_MM, PRINT_AREA_MM, PAPER_WIDTH_PX, MAX_WIDTH_BYTES
+    if mm not in PAPER_PROFILES:
+        raise ValueError(f"unsupported paper width {mm!r}")
+    PAPER_WIDTH_MM = mm
+    PRINT_AREA_MM, PAPER_WIDTH_PX, MAX_WIDTH_BYTES = PAPER_PROFILES[mm]
+
+
 PAPER_WIDTH_MM = paper_width_mm()
-PRINT_AREA_MM, PAPER_WIDTH_PX, MAX_WIDTH_BYTES = PAPER_PROFILES[PAPER_WIDTH_MM]
+apply_paper_width(PAPER_WIDTH_MM)
 
 
 class EscposSettings:

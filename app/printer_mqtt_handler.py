@@ -5,6 +5,7 @@ except ImportError:  # imported for pipeline unit use (tests) without broker dep
 import collections
 import errno
 import os
+import re
 import select
 import subprocess
 import sys
@@ -26,6 +27,7 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import escpos
+import settings_store
 
 
 def _env_int(name, default, minimum=1):
@@ -58,20 +60,108 @@ def _env_bool(name, default=False, env=None):
     return default
 
 
-# Read broker, username, and password from environment variables
-broker = os.getenv("MQTT_BROKER") or "localhost"
-username = os.getenv("MQTT_USERNAME")
-password = os.getenv("MQTT_PASSWORD")
-topic = os.getenv("MQTT_TOPIC") or "printer/commands"
-availability_topic = (os.getenv("MQTT_AVAILABILITY_TOPIC")
-                     or "printer/availability")
-last_error_topic = os.getenv("MQTT_LAST_ERROR_TOPIC") or "printer/last_error"
-dropped_total_topic = os.getenv("MQTT_DROPPED_TOTAL_TOPIC") or "printer/dropped_total"
-failed_total_topic = os.getenv("MQTT_FAILED_TOTAL_TOPIC") or "printer/failed_total"
-paper_topic = os.getenv("MQTT_PAPER_TOPIC") or "printer/paper"
-paper_low_topic = os.getenv("MQTT_PAPER_LOW_TOPIC") or "printer/paper_low"
-printer_device = (os.getenv("PRINTER_DEVICE") or os.getenv("PAPER_DEVICE")
-                  or "/dev/usb/lp1")
+# Broker, login, printer device and paper width come from the panel settings
+# file, with environment variables (Compose/.env) taking precedence. The
+# panel can change them at runtime; see apply_runtime_settings().
+_CONFIG = settings_store.effective()
+broker = _CONFIG["MQTT_BROKER"]
+username = _CONFIG["MQTT_USERNAME"] or None
+password = _CONFIG["MQTT_PASSWORD"] or None
+topic = _CONFIG["MQTT_TOPIC"]
+availability_topic = _CONFIG["MQTT_AVAILABILITY_TOPIC"]
+last_error_topic = _CONFIG["MQTT_LAST_ERROR_TOPIC"]
+dropped_total_topic = _CONFIG["MQTT_DROPPED_TOTAL_TOPIC"]
+failed_total_topic = _CONFIG["MQTT_FAILED_TOTAL_TOPIC"]
+paper_topic = _CONFIG["MQTT_PAPER_TOPIC"]
+paper_low_topic = _CONFIG["MQTT_PAPER_LOW_TOPIC"]
+printer_device = _CONFIG["PRINTER_DEVICE"]
+escpos.apply_paper_width(int(_CONFIG["PAPER_WIDTH_MM"]))
+
+# Home Assistant MQTT discovery: every value the app publishes becomes a
+# retained config, so the device shows up with its sensors without hand-
+# written YAML. Opt out with HA_DISCOVERY=0; the topics below stay the same.
+HA_DISCOVERY = _env_bool("HA_DISCOVERY", True)
+HA_DISCOVERY_PREFIX = (os.getenv("HA_DISCOVERY_PREFIX") or "homeassistant").strip("/")
+HA_DEVICE_NAME = (os.getenv("HA_DEVICE_NAME") or os.getenv("PRINTER_NAME")
+                  or "ReceiptPrinter")
+
+
+def discovery_node(topic_value=None):
+    """Stable entity prefix for this instance, derived from its command topic.
+
+    Two printers on one broker should use different command topics (see the
+    README), which keeps their discovery entries apart.
+    """
+    value = (topic if topic_value is None else topic_value).lower()
+    return re.sub(r"[^a-z0-9]+", "_", value).strip("_") or "printer"
+
+
+def discovery_topics(node=None):
+    """The retained discovery config topics for one instance prefix."""
+    node = node or discovery_node()
+    return [f"{HA_DISCOVERY_PREFIX}/{component}/receiptmqtt_{node}/{key}/config"
+            for component, key in DISCOVERY_ENTITIES]
+
+
+DISCOVERY_ENTITIES = (
+    # component, object id
+    ("binary_sensor", "availability"),
+    ("binary_sensor", "paper"),
+    ("binary_sensor", "paper_low"),
+    ("sensor", "last_error"),
+    ("sensor", "dropped_total"),
+    ("sensor", "failed_total"),
+)
+
+
+def discovery_messages():
+    """(topic, payload) retained Home Assistant discovery configs."""
+    node = discovery_node()
+    device = {
+        "identifiers": [f"receiptmqtt_{node}"],
+        "name": HA_DEVICE_NAME,
+        "manufacturer": "PrintMQTTify",
+        "model": "ReceiptMQTT",
+    }
+    offline = {"topic": availability_topic,
+               "payload_available": "online",
+               "payload_not_available": "offline"}
+    entities = [
+        # An availability entity must not use itself as availability, or Home
+        # Assistant would show "unavailable" instead of "offline".
+        ("binary_sensor", "availability", "Availability", availability_topic,
+         {"payload_on": "online", "payload_off": "offline",
+          "device_class": "connectivity"}, None),
+        # device_class problem wants ON = a problem: paper OFF is out of
+        # paper, paper_low ON is the near-end sensor tripped. Same polarity
+        # as the hand-written YAML in the README.
+        ("binary_sensor", "paper", "Paper", paper_topic,
+         {"payload_on": "OFF", "payload_off": "ON",
+          "device_class": "problem"}, offline),
+        ("binary_sensor", "paper_low", "Paper low", paper_low_topic,
+         {"payload_on": "ON", "payload_off": "OFF",
+          "device_class": "problem"}, offline),
+        ("sensor", "last_error", "Last error", last_error_topic, {}, offline),
+        ("sensor", "dropped_total", "Dropped jobs", dropped_total_topic,
+         {"state_class": "total_increasing"}, offline),
+        ("sensor", "failed_total", "Failed jobs", failed_total_topic,
+         {"state_class": "total_increasing"}, offline),
+    ]
+    messages = []
+    for component, key, name, state_topic, extra, availability in entities:
+        payload = {
+            "name": name,
+            "unique_id": f"receiptmqtt_{node}_{key}",
+            "state_topic": state_topic,
+            "device": device,
+        }
+        payload.update(extra)
+        if availability is not None:
+            payload["availability"] = [availability]
+        config_topic = (f"{HA_DISCOVERY_PREFIX}/{component}/"
+                        f"receiptmqtt_{node}/{key}/config")
+        messages.append((config_topic, payload))
+    return messages
 
 # Default receipt printer settings: ghostscript renders the reportlab PDF at
 # 203 dpi into a 384 px wide raster (48 mm roll), matching the old PPD's
@@ -82,6 +172,82 @@ RASTER_DPI_X = _env_int("RASTER_DPI_X", 203)
 RASTER_DPI_Y = _env_int("RASTER_DPI_Y", 203)
 RASTER_WIDTH_PX = _env_int("RASTER_WIDTH_PX", escpos.PAPER_WIDTH_PX)
 RASTER_HEIGHT_PX = _env_int("RASTER_HEIGHT_PX", 480)
+
+# Keys whose change needs a new broker connection rather than just new
+# values for the next job: login details, and the topics (the subscription,
+# the last will and the retained availability move with them).
+RECONNECT_KEYS = ("MQTT_BROKER", "MQTT_USERNAME", "MQTT_PASSWORD",
+                  "MQTT_TOPIC", "MQTT_AVAILABILITY_TOPIC", "MQTT_PAPER_TOPIC",
+                  "MQTT_PAPER_LOW_TOPIC", "MQTT_LAST_ERROR_TOPIC",
+                  "MQTT_DROPPED_TOTAL_TOPIC", "MQTT_FAILED_TOTAL_TOPIC")
+
+# Topic setting -> module global.
+TOPIC_GLOBALS = {
+    "MQTT_TOPIC": "topic",
+    "MQTT_AVAILABILITY_TOPIC": "availability_topic",
+    "MQTT_PAPER_TOPIC": "paper_topic",
+    "MQTT_PAPER_LOW_TOPIC": "paper_low_topic",
+    "MQTT_LAST_ERROR_TOPIC": "last_error_topic",
+    "MQTT_DROPPED_TOTAL_TOPIC": "dropped_total_topic",
+    "MQTT_FAILED_TOTAL_TOPIC": "failed_total_topic",
+}
+
+
+def apply_runtime_settings(env=None, client=None):
+    """Re-read panel settings into this process; returns the keys that changed.
+
+    Environment overrides are resolved by settings_store, so a value set in
+    `.env` or Compose still wins over anything saved from the panel. When a
+    client is given, the old availability topic is cleared so Home Assistant
+    does not keep reading a retained "online" that nothing updates any more.
+    """
+    global broker, username, password, printer_device, RASTER_WIDTH_PX
+    global topic, availability_topic, paper_topic, paper_low_topic
+    global last_error_topic, dropped_total_topic, failed_total_topic
+    config = settings_store.effective(env)
+    changed = []
+
+    if broker != config["MQTT_BROKER"]:
+        broker = config["MQTT_BROKER"]
+        changed.append("MQTT_BROKER")
+    if (username or None) != (config["MQTT_USERNAME"] or None):
+        username = config["MQTT_USERNAME"] or None
+        changed.append("MQTT_USERNAME")
+    if (password or None) != (config["MQTT_PASSWORD"] or None):
+        password = config["MQTT_PASSWORD"] or None
+        changed.append("MQTT_PASSWORD")
+    if printer_device != config["PRINTER_DEVICE"]:
+        printer_device = config["PRINTER_DEVICE"]
+        changed.append("PRINTER_DEVICE")
+
+    for key, name in TOPIC_GLOBALS.items():
+        if globals()[name] != config[key]:
+            if client is not None:
+                # Drop retained values that would otherwise linger: the old
+                # availability topic, and the discovery configs of the old
+                # entity prefix when the command topic moves.
+                stale = []
+                if key == "MQTT_AVAILABILITY_TOPIC":
+                    stale.append(globals()[name])
+                if key == "MQTT_TOPIC":
+                    stale.extend(discovery_topics())
+                for stale_topic in stale:
+                    try:
+                        client.publish(stale_topic, b"", qos=1, retain=True)
+                    except Exception:
+                        pass
+            globals()[name] = config[key]
+            changed.append(key)
+
+    paper = int(config["PAPER_WIDTH_MM"])
+    if escpos.PAPER_WIDTH_MM != paper:
+        escpos.apply_paper_width(paper)
+        changed.append("PAPER_WIDTH_MM")
+
+    width = _env_int("RASTER_WIDTH_PX", escpos.PAPER_WIDTH_PX)
+    if RASTER_WIDTH_PX != width:
+        RASTER_WIDTH_PX = width
+    return changed
 
 # DLE EOT 4 - real-time paper sensor status request. "Real-time" means the
 # printer answers immediately rather than queueing the request behind print
@@ -410,6 +576,39 @@ def install_term_handler(client):
     return stop
 
 
+def start_settings_watcher(client, reload_event, interval=2.0):
+    """Apply panel changes without restarting the container.
+
+    Paper width and printer device take effect on the next job. A broker or
+    login change disconnects the client so the main loop reconnects with the
+    new values; the same client object is reused, so the availability poller
+    and its retained topic keep working.
+    """
+    def _loop():
+        seen = settings_store.fingerprint()
+        while not SHUTDOWN.wait(interval):
+            current = settings_store.fingerprint()
+            if current == seen:
+                continue
+            seen = current
+            try:
+                changed = apply_runtime_settings(client=client)
+            except Exception as e:
+                print(f"Ignoring settings change: {e}")
+                continue
+            if not changed:
+                continue
+            print(f"Settings changed: {', '.join(changed)}")
+            if any(key in changed for key in RECONNECT_KEYS):
+                reload_event.set()
+                try:
+                    client.disconnect()
+                except Exception as e:
+                    print(f"Could not reconnect for new settings yet: {e}")
+
+    threading.Thread(target=_loop, name="settings", daemon=True).start()
+
+
 def on_connect(client, userdata, flags, rc):
     """Callback for when the client connects to the MQTT broker."""
     global AVAILABILITY_THREAD
@@ -420,6 +619,13 @@ def on_connect(client, userdata, flags, rc):
         # that arrive while the container is disconnected. Clean session
         # still loses genuine broker-offline messages - that is inherent.
         client.subscribe(topic, qos=1)
+        # Retained discovery configs: published on every connect so a broker
+        # that lost them (or a renamed topic) still ends up with the right
+        # entities in Home Assistant.
+        if HA_DISCOVERY:
+            for config_topic, config in discovery_messages():
+                client.publish(config_topic, json.dumps(config), qos=1,
+                               retain=True)
         # Overwrite a retained "offline" (our will, or the broker's after a
         # drop) now rather than at the next 60s poll.
         with _AVAIL_LOCK:
@@ -885,9 +1091,9 @@ def print_job(title, message):
 
 
 if __name__ == "__main__":
-    # Debian trixie ships paho-mqtt 2.x, which makes CallbackAPIVersion a
-    # required first argument; bookworm's 1.x does not know it. Pick the
-    # calling convention from what actually imported.
+    # paho-mqtt 2.x makes CallbackAPIVersion a required first argument; 1.x
+    # (what Alpine ships) does not know it. Pick the calling convention from
+    # what actually imported.
     if mqtt is not None:
         try:
             client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1,
@@ -916,9 +1122,35 @@ if __name__ == "__main__":
     # loop_forever() returns and the cleanup below runs.
     install_term_handler(client)
 
+    # Panel changes are picked up from the settings file: paper width and
+    # printer device on the next job, broker/login by reconnecting below.
+    reload_event = threading.Event()
+    start_settings_watcher(client, reload_event)
+
     try:
-        if connect_with_retry(client, broker, broker_port, 60):
-            client.loop_forever()
+        while connect_with_retry(client, broker, broker_port, 60):
+            try:
+                client.loop_forever()
+            except Exception as e:
+                if not reload_event.is_set():
+                    raise
+                # paho can raise when disconnect() lands while its reader is
+                # between select() and recv(). The reconnect below opens a
+                # fresh socket, so treat it as the end of this connection.
+                print(f"MQTT loop stopped for the settings change ({e}).")
+            if not reload_event.is_set():
+                # Not a settings change: the shutdown path disconnected us.
+                break
+            reload_event.clear()
+            if username and password:
+                client.username_pw_set(username, password)
+            else:
+                client.username_pw_set(None)
+            configure_tls(client)
+            # The last will is only used on the next CONNECT, so set it from
+            # the (possibly changed) availability topic before reconnecting.
+            client.will_set(availability_topic, "offline", qos=1, retain=True)
+            print("Reconnecting with the settings from the control panel...")
     except Exception as e:
         print(f"Failed to start MQTT handler: {e}")
         raise SystemExit(1)

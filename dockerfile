@@ -55,6 +55,10 @@ COPY app/ $APP_DIR/
 # The chmod on the config COPY above leaves the directory itself 644; the
 # unprivileged app user must be able to enter and read it.
 RUN chmod 755 $APP_DIR
+# Panel-edited settings are written here; docker-compose mounts a volume on
+# it so they survive container re-creation. The entrypoint re-chowns it in
+# case the volume was created root-owned.
+RUN mkdir -p /app/data && chown receipt:receipt /app/data && chmod 700 /app/data
 WORKDIR $APP_DIR
 
 # Use entrypoint script for runtime configuration and startup

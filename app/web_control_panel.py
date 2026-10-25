@@ -1,9 +1,12 @@
 """Web control panel for PrintMQTTify.
 
 Endpoints:
-  /            status + test-print page (Basic auth, see below)
+  /            status, test print and the settings form
   /status      lpstat -p output plus a device-open probe, as JSON
+  /settings    GET current values, POST changes (paper, broker, login, topics,
+               device)
   /test-print  write the escpos selftest raster straight to PRINTER_DEVICE
+  /test-message  publish a print job through the broker (end-to-end check)
 
 CUPS itself is loopback-only now that printing is a raw queue, so this panel
 is the only network-facing surface besides MQTT. It is protected with HTTP
@@ -11,8 +14,12 @@ Basic auth using ADMIN_USER / ADMIN_PASS and speaks plain HTTP unless WEB_TLS_CE
 WEB_TLS_KEY are set (then the entrypoint serves HTTPS); otherwise put a reverse
 proxy with TLS in front of it, or keep it on localhost. Repeated wrong
 passwords from one address are locked out for a while, and /test-print has a
-cooldown. There is no settings form: real configuration happens through
-container environment variables.
+cooldown.
+
+The settings form stores paper width, printer device, broker login and all
+MQTT topics in one JSON file. Environment variables set in Compose/.env still
+win and are shown read-only, so the form only replaces editing `.env` for
+values that are not set there.
 
 The entrypoint serves this module with gunicorn (ONE worker: the lockout and
 cooldown state live in this process). `python3 web_control_panel.py` still
@@ -21,13 +28,21 @@ starts Flask's development server, for local use only.
 
 import functools
 import hmac
+import json
 import os
 import subprocess
 import threading
 import time
+from datetime import datetime
 
 import escpos
-from printer_mqtt_handler import write_device_retrying, printer_device
+import printer_mqtt_handler as handler
+import settings_store
+
+try:
+    import paho.mqtt.client as mqtt
+except ImportError:  # tests and pipeline-only installs without paho
+    mqtt = None
 from flask import Flask, render_template, request, jsonify, Response
 
 app = Flask(__name__)
@@ -36,9 +51,6 @@ cups_admin_user = os.getenv("ADMIN_USER", "admin")
 cups_admin_pass = os.environ.get("ADMIN_PASS", "")
 if not cups_admin_pass:
     raise SystemExit("ADMIN_PASS is not set; control panel cannot start safely.")
-
-MQTT_TOPIC = os.getenv("MQTT_TOPIC") or "printer/commands"
-
 
 def _env_number(name, default, minimum=0):
     raw = os.getenv(name)
@@ -157,17 +169,72 @@ def check_auth(username, password):
         hmac.compare_digest(password.encode(), cups_admin_pass.encode())
 
 
+def current_device():
+    """The device path in force now (panel changes apply without a restart)."""
+    return settings_store.effective()["PRINTER_DEVICE"]
+
+
+def new_mqtt_client():
+    """paho client for both 1.x and 2.x, matching the handler's choice."""
+    if mqtt is None:
+        raise RuntimeError("paho-mqtt is not installed")
+    try:
+        return mqtt.Client(mqtt.CallbackAPIVersion.VERSION1,
+                           protocol=mqtt.MQTTv311)
+    except AttributeError:
+        return mqtt.Client(protocol=mqtt.MQTTv311)
+
+
+def publish_test_message(config=None, payload=None, timeout=10):
+    """Publish one print job through the configured broker; returns the topic.
+
+    This is the same path real jobs take: broker login, TLS if configured,
+    command topic, then the handler prints it. It proves the MQTT side works,
+    which the panel's own test print (device only) cannot.
+    """
+    config = config or settings_store.effective()
+    if payload is None:
+        payload = json.dumps({
+            "printer_name": os.getenv("PRINTER_NAME") or "ReceiptPrinter",
+            "title": "PrintMQTTify test",
+            "message": "Published from the control panel at "
+                       + datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        })
+    client = new_mqtt_client()
+    if config["MQTT_USERNAME"] and config["MQTT_PASSWORD"]:
+        client.username_pw_set(config["MQTT_USERNAME"],
+                               config["MQTT_PASSWORD"])
+    handler.configure_tls(client)
+    client.connect(config["MQTT_BROKER"], handler.broker_port, timeout)
+    client.loop_start()
+    try:
+        client.publish(config["MQTT_TOPIC"], payload, qos=1).wait_for_publish(
+            timeout)
+    finally:
+        client.loop_stop()
+        client.disconnect()
+    return config["MQTT_TOPIC"]
+
+
+def apply_local_settings():
+    """Keep this process's paper profile in step with the settings file."""
+    config = settings_store.effective()
+    escpos.apply_paper_width(int(config["PAPER_WIDTH_MM"]))
+    return config
+
+
 def device_probe():
     """Can we open the printer device right now? lpstat says nothing about
     the USB device; this is what /status should really show."""
-    if not printer_device:
+    device = current_device()
+    if not device:
         return "no PRINTER_DEVICE configured"
     try:
-        fd = os.open(printer_device, os.O_WRONLY)
+        fd = os.open(device, os.O_WRONLY)
         os.close(fd)
-        return f"{printer_device} open OK"
+        return f"{device} open OK"
     except OSError as e:
-        return f"{printer_device}: {e.strerror or e}"
+        return f"{device}: {e.strerror or e}"
 
 
 def require_auth(f):
@@ -199,7 +266,9 @@ def require_auth(f):
 @require_auth
 def index():
     """Render the main control panel."""
-    return render_template('index.html', mqtt_topic=MQTT_TOPIC)
+    return render_template(
+        'index.html',
+        mqtt_topic=settings_store.effective()["MQTT_TOPIC"])
 
 
 @app.route('/status')
@@ -243,15 +312,88 @@ def test_print():
                         "error": f"test print was just sent; wait {wait}s"}
                        ), 429, {"Retry-After": str(wait)}
     try:
+        apply_local_settings()
         settings = escpos.EscposSettings.from_env()
         pbm = escpos.selftest_pbm()
         escpos_bytes, _pages = escpos.render_all(pbm, settings)
-        n = write_device_retrying(printer_device, escpos_bytes)
+        device = current_device()
+        n = handler.write_device_retrying(device, escpos_bytes)
         return jsonify({"success": True,
-                        "output": f"wrote {n} bytes to {printer_device}"})
+                        "output": f"wrote {n} bytes to {device}"})
     except OSError as e:
         return jsonify({"success": False,
-                        "error": f"{printer_device}: {e}"}), 502
+                        "error": f"{current_device()}: {e}"}), 502
+
+
+def _settings_guard():
+    """CSRF response for a settings POST, or None when it may proceed."""
+    if request.headers.get("Sec-Fetch-Site", "same-origin") not in (
+            "same-origin", "none"):
+        return jsonify({"saved": False,
+                        "error": "cross-site request refused"}), 403
+    if request.headers.get("X-Requested-With") != CSRF_HEADER_VALUE:
+        return jsonify({"saved": False,
+                        "error": "missing X-Requested-With header"}), 403
+    return None
+
+
+@app.route('/settings')
+@require_auth
+def get_settings():
+    """Current values plus which fields the environment overrides."""
+    apply_local_settings()
+    return jsonify({"settings": settings_store.effective(),
+                    "locked": settings_store.locked(),
+                    "file": settings_store.SETTINGS_FILE,
+                    "paper_width_mm": escpos.PAPER_WIDTH_MM,
+                    "print_area_mm": escpos.PRINT_AREA_MM})
+
+
+@app.route('/settings', methods=['POST'])
+@require_auth
+def save_settings():
+    """Store panel changes. Environment-locked fields are left alone."""
+    refused = _settings_guard()
+    if refused is not None:
+        return refused
+    values = {key: request.form.get(key, "")
+              for key in settings_store.KEYS if key in request.form}
+    if not values:
+        return jsonify({"saved": False,
+                        "errors": ["no settings were submitted"]}), 400
+    try:
+        result = settings_store.update(values)
+    except OSError as e:
+        return jsonify({"saved": False,
+                        "error": f"could not write settings: {e}"}), 500
+    if not result["saved"]:
+        return jsonify(result), 400
+    apply_local_settings()
+    result["settings"] = settings_store.effective()
+    result["locked"] = settings_store.locked()
+    return jsonify(result)
+
+
+@app.route('/test-message', methods=['POST'])
+@require_auth
+def test_message():
+    """Publish a test job through the broker, so the whole MQTT path runs."""
+    refused = _settings_guard()
+    if refused is not None:
+        return refused
+    wait = _cooldown_claim()
+    if wait:
+        return jsonify({"success": False,
+                        "error": f"a test was just sent; wait {wait}s"}
+                       ), 429, {"Retry-After": str(wait)}
+    apply_local_settings()
+    try:
+        topic_used = publish_test_message()
+    except Exception as e:
+        return jsonify({"success": False,
+                        "error": f"could not publish: {e}"}), 502
+    return jsonify({"success": True,
+                    "output": f"published a test message to {topic_used}"})
 
 
 def _cooldown_claim():

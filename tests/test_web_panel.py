@@ -315,3 +315,172 @@ def test_gunicorn_serves_https_with_generated_cert(tmp_path):
             pytest.fail("HTTPS panel never answered")
     finally:
         p.terminate(); p.wait(10)
+
+
+class TestSettingsEndpoints:
+    @pytest.fixture
+    def settings_file(self, tmp_path, monkeypatch):
+        path = tmp_path / "settings.json"
+        monkeypatch.setattr(w.settings_store, "SETTINGS_FILE", str(path))
+        for key in w.settings_store.KEYS:
+            monkeypatch.delenv(key, raising=False)
+        monkeypatch.delenv("PAPER_DEVICE", raising=False)
+        before = escpos.PAPER_WIDTH_MM
+        yield path
+        escpos.apply_paper_width(before)
+
+    def test_requires_auth(self, client):
+        assert client.get("/settings").status_code == 401
+        assert client.post("/settings", data={"PAPER_WIDTH_MM": "48"}
+                           ).status_code == 401
+
+    def test_get_reports_values_and_lock_state(self, client, settings_file):
+        body = json.loads(client.get("/settings", headers=auth_pair()).data)
+        assert body["settings"]["MQTT_TOPIC"] == "printer/commands"
+        assert body["settings"]["PAPER_WIDTH_MM"] == "48"
+        assert body["locked"]["MQTT_TOPIC"] is False
+        assert body["file"] == str(settings_file)
+
+    def test_post_saves_paper_and_topics(self, client, settings_file):
+        resp = client.post("/settings", headers=post_pair(), data={
+            "PAPER_WIDTH_MM": "58",
+            "MQTT_TOPIC": "kitchen/commands",
+            "MQTT_AVAILABILITY_TOPIC": "kitchen/availability",
+            "PRINTER_DEVICE": "/dev/usb/lp0",
+        })
+        body = json.loads(resp.data)
+        assert resp.status_code == 200 and body["saved"] is True
+        saved = json.loads(settings_file.read_text())
+        assert saved["MQTT_TOPIC"] == "kitchen/commands"
+        assert saved["MQTT_AVAILABILITY_TOPIC"] == "kitchen/availability"
+        assert saved["PRINTER_DEVICE"] == "/dev/usb/lp0"
+        # the panel applies paper width to its own test-print raster
+        assert escpos.PAPER_WIDTH_MM == 58
+
+    def test_saved_topic_is_shown_on_the_page(self, client, settings_file):
+        client.post("/settings", headers=post_pair(),
+                    data={"MQTT_TOPIC": "kitchen/commands"})
+        page = client.get("/", headers=auth_pair()).data
+        assert b"kitchen/commands" in page
+
+    def test_environment_locked_key_is_ignored(self, client, settings_file,
+                                               monkeypatch):
+        monkeypatch.setenv("MQTT_BROKER", "env-host")
+        resp = client.post("/settings", headers=post_pair(), data={
+            "MQTT_BROKER": "panel-host",
+            "PAPER_WIDTH_MM": "80",
+        })
+        body = json.loads(resp.data)
+        assert body["saved"] is True
+        assert body["ignored_locked"] == ["MQTT_BROKER"]
+        saved = json.loads(settings_file.read_text())
+        assert "MQTT_BROKER" not in saved and saved["PAPER_WIDTH_MM"] == "80"
+
+    def test_csrf_header_required(self, client, settings_file):
+        resp = client.post("/settings", headers=auth_pair(),
+                           data={"PAPER_WIDTH_MM": "80"})
+        assert resp.status_code == 403
+        assert not settings_file.exists()
+
+    @pytest.mark.parametrize("data,message", [
+        ({"PAPER_WIDTH_MM": "57"}, "PAPER_WIDTH_MM must be"),
+        ({"MQTT_TOPIC": "bad topic"}, "plain MQTT topic"),
+        ({"PRINTER_DEVICE": "lp0"}, "absolute path"),
+    ])
+    def test_invalid_values_are_rejected(self, client, settings_file, data,
+                                         message):
+        resp = client.post("/settings", headers=post_pair(), data=data)
+        body = json.loads(resp.data)
+        assert resp.status_code == 400 and body["saved"] is False
+        assert any(message in error for error in body["errors"])
+        assert not settings_file.exists()
+
+    def test_empty_post_is_rejected(self, client, settings_file):
+        resp = client.post("/settings", headers=post_pair())
+        assert resp.status_code == 400
+
+
+class TestTestMessage:
+    def test_requires_auth_and_csrf(self, client):
+        assert client.post("/test-message").status_code == 401
+        assert client.post("/test-message", headers=auth_pair()).status_code == 403
+
+    def test_publishes_and_reports_the_topic(self, client, monkeypatch):
+        monkeypatch.setattr(w, "publish_test_message",
+                            lambda: "kitchen/commands")
+        resp = client.post("/test-message", headers=post_pair())
+        body = json.loads(resp.data)
+        assert body["success"] is True
+        assert "kitchen/commands" in body["output"]
+
+    def test_publish_failure_is_reported(self, client, monkeypatch):
+        def boom():
+            raise RuntimeError("connection refused")
+        monkeypatch.setattr(w, "publish_test_message", boom)
+        resp = client.post("/test-message", headers=post_pair())
+        body = json.loads(resp.data)
+        assert resp.status_code == 502
+        assert "connection refused" in body["error"]
+
+    def test_cooldown_shared_with_test_print(self, client, monkeypatch):
+        monkeypatch.setattr(w, "publish_test_message",
+                            lambda: "printer/commands")
+        monkeypatch.setattr(w, "TEST_PRINT_COOLDOWN", 30)
+        assert client.post("/test-message", headers=post_pair()).status_code == 200
+        resp = client.post("/test-print", headers=post_pair())
+        assert resp.status_code == 429
+
+
+class TestPublishTestMessage:
+    def _fake_client(self, events):
+        class Info:
+            def wait_for_publish(self, timeout):
+                events["waited"] = timeout
+
+        class Fake:
+            def username_pw_set(self, user, password):
+                events["auth"] = (user, password)
+
+            def connect(self, host, port, keepalive):
+                events["connect"] = (host, port, keepalive)
+
+            def loop_start(self):
+                events["started"] = True
+
+            def publish(self, topic, payload, qos):
+                events["publish"] = (topic, payload, qos)
+                return Info()
+
+            def loop_stop(self):
+                events["stopped"] = True
+
+            def disconnect(self):
+                events["disconnected"] = True
+
+        return Fake()
+
+    def test_uses_effective_settings(self, monkeypatch):
+        events = {}
+        monkeypatch.setattr(w, "new_mqtt_client", lambda: self._fake_client(events))
+        monkeypatch.setattr(w.handler, "configure_tls", lambda client: None)
+        topic = w.publish_test_message(
+            config={"MQTT_BROKER": "192.0.2.10", "MQTT_TOPIC": "kitchen/commands",
+                    "MQTT_USERNAME": "kitchen", "MQTT_PASSWORD": "secret"},
+            payload="job", timeout=7)
+        assert topic == "kitchen/commands"
+        assert events["auth"] == ("kitchen", "secret")
+        assert events["connect"][0] == "192.0.2.10"
+        assert events["publish"][0] == "kitchen/commands"
+        assert events["publish"][1] == "job" and events["publish"][2] == 1
+        assert events["waited"] == 7
+        assert events["stopped"] is True and events["disconnected"] is True
+
+    def test_anonymous_when_no_login(self, monkeypatch):
+        events = {}
+        monkeypatch.setattr(w, "new_mqtt_client", lambda: self._fake_client(events))
+        monkeypatch.setattr(w.handler, "configure_tls", lambda client: None)
+        w.publish_test_message(
+            config={"MQTT_BROKER": "localhost", "MQTT_TOPIC": "printer/commands",
+                    "MQTT_USERNAME": "", "MQTT_PASSWORD": ""},
+            payload="job")
+        assert "auth" not in events

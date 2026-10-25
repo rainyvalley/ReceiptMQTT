@@ -112,6 +112,15 @@ echo "Tailing CUPS logs..."
 touch /var/log/cups/error_log
 tail -F /var/log/cups/error_log &
 
+# Settings saved from the web panel go here. A named volume is created
+# root-owned by Docker, so hand it to the app user before the panel starts.
+mkdir -p /app/data
+if chown receipt:receipt /app/data 2>/dev/null; then
+  chmod 700 /app/data 2>/dev/null || true
+else
+  echo "WARNING: /app/data is not owned by 'receipt'; settings saved from the panel may not persist."
+fi
+
 # Run the app as the unprivileged "receipt" user. It needs write access to
 # the printer device: take the device's own group id (it is the host's, so it
 # may differ from this image's "lp"). If the device still is not writable,
