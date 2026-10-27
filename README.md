@@ -1,8 +1,12 @@
-# PrintMQTTify (ZJ-58 / ZJ-80 / POS58 edition)
+# PrintMQTTify (ZJ-58 / ZJ-80 / POS58 / MJ-5890G edition)
 
 PrintMQTTify prints MQTT messages on a USB thermal receipt printer. It runs in Docker. Send it a message from Home Assistant, Node-RED or any MQTT client, and a receipt comes out.
 
-It works with Zijiang **ZJ-58**, the widely sold **POS58**, and clones that speak ESC/POS. It prints on **48 mm** wide paper by default. For 80 mm paper, see [Paper width](#paper-width). A typical use is a Home Assistant shopping list, reminder or alert.
+It works with Zijiang **ZJ-58**, the widely sold **POS58**, the **MJ-5890G**, and clones that speak ESC/POS. It prints on **48 mm** wide paper by default. For other paper widths, see [Paper width](#paper-width). A typical use is a Home Assistant shopping list, reminder or alert.
+
+**Tested printers:** Zijiang ZJ-58 / POS58, and the MJ-5890G. **Tested paper widths:** 48 mm and 58 mm.
+
+It is built to work with any USB printer that Linux exposes as a `/dev/usb/lpN` device (`lp0`, `lp1`, ...; the kernel `usblp` driver creates these). The receipt width and height are adjustable, so you can fit the roll and the length of receipt your printer takes: see [Paper width](#paper-width) and [Long receipts](#long-receipts).
 
 ## What you get
 
@@ -14,7 +18,7 @@ It works with Zijiang **ZJ-58**, the widely sold **POS58**, and clones that spea
 
 What it does not do yet:
 
-- **Proof that 80 mm works.** 80 mm paper is supported by one setting, but it has not been tested on a real printer.
+- **Proof that 80 mm works.** 80 mm paper is supported by one setting, but only 48 mm and 58 mm have been tested on real printers.
 - **Long receipts.** About **10 lines** of message text fit on one receipt. Text below that is cut off and a warning is logged. See [Long receipts](#long-receipts).
 - **Printers that only receive.** The paper sensors need a printer that can answer back. If yours cannot, printing still works and the sensors stay empty.
 
@@ -223,7 +227,7 @@ dots as 48 mm paper. An 80 mm roll prints 72 mm.
 
 Any other value is ignored and 48 is used, with a line in the log.
 
-**80 mm has not been tested on a real printer.** It is covered by unit tests only. If a receipt comes out cut off or too narrow, set `PAPER_WIDTH_MM` back to `48` and open an issue.
+**48 mm and 58 mm have been tested on real printers. 80 mm has not.** It is covered by unit tests only. If a receipt comes out cut off or too narrow, set `PAPER_WIDTH_MM` back to `48` and open an issue.
 
 ### Long receipts
 
