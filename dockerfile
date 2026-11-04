@@ -6,7 +6,7 @@
 # and one package set. CUPS 2.4.x is in main; the queue is raw and the
 # ESC/POS emission lives in app/escpos.py, not in a CUPS filter, so the stack
 # survives 2.5/3.x.
-FROM alpine:3.22
+FROM alpine:3.24
 
 ENV APP_DIR=/app
 
