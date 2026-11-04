@@ -20,7 +20,7 @@ sys.path.insert(0, "/app")
 from printer_mqtt_handler import send_raw_to_printer
 
 # A framed one-band job: ESC @ reset, GS v 0 0 (xDim=2, yDim=1) + one band
-# byte, then ESC @ reset. 0x1d 0x76 0x30 is the DLE-V style raster header
+# byte, then ESC @ reset. 0x1d 0x76 0x30 is the GS v 0 raster header
 # every ESC/POS renderer starts a band with.
 PAYLOAD = b"\x1b@\x1d\x76\x30\x00\x02\x01\x55\x1b@"
 

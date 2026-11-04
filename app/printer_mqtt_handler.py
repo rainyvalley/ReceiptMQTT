@@ -449,7 +449,7 @@ def publish_availability(client, interval=60):
         global LAST_AVAILABILITY
         status = check_printer()
 
-        # Only log and publish on change; the topic is retained
+        # Only log on change; the availability topic is published on every poll
         LAST_AVAILABILITY = status
         if status != state["status"]:
             print(f"Publishing status: {status}")
@@ -1068,11 +1068,9 @@ def send_raw_to_printer(escpos_bytes):
     """Deliver a pre-rendered ESC/POS bytestring to the printer.
 
     Writes directly to the printer character device (PRINTER_DEVICE).
-    CUPS is deliberately out of the data path: its file: backend refuses
-    to write for 'raw' queues (file devices cannot be used with raw print
-    queues - a PPD is required), which silently completed jobs here with
-    zero bytes delivered while reporting success. A direct write is
-    verifiable: bytes reach the device or the exception says why not.
+    CUPS is out of the data path: its file: backend refuses raw queues (a
+    PPD is required), so such jobs complete with zero bytes. A direct write
+    delivers the bytes or raises.
 
     EBUSY is retried, not fatal: the 60s paper poll holds the device for
     up to a second (usblp allows a single opener), and falling through

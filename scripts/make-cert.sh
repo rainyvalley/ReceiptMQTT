@@ -17,6 +17,6 @@ umask 077
 openssl req -x509 -newkey rsa:2048 -nodes -days 825 \
   -subj "/CN=${names[0]}" -addext "subjectAltName=$san" \
   -keyout "$dir/panel.key" -out "$dir/panel.crt" 2>/dev/null
-# The key stays private to you; the container's app user must read it too.
+# chmod 644 lets the container's app user read both files.
 chmod 644 "$dir/panel.crt" "$dir/panel.key"
 echo "Wrote $dir/panel.crt and $dir/panel.key (valid for: $san)"

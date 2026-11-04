@@ -10,8 +10,7 @@ services:
     volumes:
       - printmqttify_data:/app/data
     # USB device mapping lives in docker-compose.override.yml per host;
-    # never pin a /dev/bus/usb/NNN/NNN path here (renumbering broke
-    # printing for ten days once).
+    # never pin a /dev/bus/usb/NNN/NNN path here; the numbers change.
     environment:
       # Everything below can be set in .env; the value after :- is used when
       # a setting is missing or empty. See README "Settings".
@@ -22,8 +21,8 @@ services:
       # connect. BOOT_RECEIPT=0 turns the paper receipt off (the log line
       # stays); useful on a printer with no paper sensor or a shared queue.
       - BOOT_RECEIPT=${BOOT_RECEIPT:-1}
-      # Feed and cut after each receipt. These match the old setup (no extra
-      # feed, no cut). The program's own defaults, used by plain `docker
+      # Feed and cut after each receipt: no extra feed, no cut. The program's
+      # own defaults, used by plain `docker
       # run`, are FEED_DIST=2 and CUTTING=1.
       - FEED_DIST=${FEED_DIST:-0}
       - CUTTING=${CUTTING:-0}

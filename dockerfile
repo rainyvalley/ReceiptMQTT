@@ -36,7 +36,7 @@ RUN apk add --no-cache \
     && rm -rf /var/cache/apk/*
 
 # Unprivileged account the app (MQTT handler and web panel) runs as. cupsd
-# still starts as root inside the entrypoint; it then drops to this user.
+# starts as root in the entrypoint and drops to CUPS's own lp user.
 # The "lp" group lets it write /dev/usb/lpN; the entrypoint adds the device's
 # own group id at start, since that number comes from the host. The "receipt"
 # group is primary, matching the setpriv --regid call in the entrypoint.

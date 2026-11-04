@@ -289,9 +289,8 @@ def status():
 def test_print():
     """Print the internal test pattern directly to the printer device.
 
-    The old panel sent a text file via lp onto the raw+file: queue, which
-    CUPS silently discards (zero bytes to the device). This runs the same
-    selftest raster the app prints, byte-for-byte.
+    Runs the same selftest raster the app prints, byte-for-byte, straight to
+    the device; the CUPS raw+file: queue discards such jobs.
     """
     # Browsers replay cached Basic credentials on cross-site form POSTs, so
     # any page the admin visits could fire prints (CSRF). Two checks: fetch
