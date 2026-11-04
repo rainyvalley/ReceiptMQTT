@@ -1,0 +1,13 @@
+# Keep the container base images (Dockerfile/compose) and the GitHub
+# Actions SHAs current; a weekly pass opens one PR per update.
+version: 2
+updates:
+  # Container bases pinned by the Dockerfile/compose in this directory.
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: weekly
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
