@@ -26,7 +26,7 @@ What it does not do yet:
 
 ## Install
 
-You need Docker and an MQTT broker (for example Mosquitto). The image is published for 64-bit x86 (`linux/amd64`), 64-bit ARM (`linux/arm64`), 32-bit ARMv6 (`linux/arm/v6`) and 32-bit ARMv7 (`linux/arm/v7`), all from one Alpine base, so there is no separate ARM image to look after. Find your printer's device with `lsusb` and `dmesg | grep usb`. It is usually `/dev/usb/lp0` or `/dev/usb/lp1`. If you have two USB printers, the numbers can swap after a reboot. See [`docs/hardware-notes.md`](./docs/hardware-notes.md).
+You need Docker and an MQTT broker (for example Mosquitto). The image is published for 64-bit x86 (`linux/amd64`), 64-bit ARM (`linux/arm64`), 32-bit ARMv6 (`linux/arm/v6`) and 32-bit ARMv7 (`linux/arm/v7`), all from one Alpine base image. Find your printer's device with `lsusb` and `dmesg | grep usb`. It is usually `/dev/usb/lp0` or `/dev/usb/lp1`. If you have two USB printers, the numbers can swap after a reboot. See [`docs/hardware-notes.md`](./docs/hardware-notes.md).
 
 **1. Get the files.**
 
@@ -38,7 +38,7 @@ cd ReceiptMQTT
 **2. Pick an image.**
 
 - **Prebuilt (recommended).** `docker-compose.yml` already points at `ghcr.io/rainyvalley/receiptmqtt:latest`. Compose pulls the right architecture for your host on the first start. Other tags: `beta` (test builds) and `sha-<commit>`.
-- **Build it yourself.** Run `docker build -t ghcr.io/rainyvalley/receiptmqtt:local .` in the repo, then put `IMAGE_TAG=local` in your `.env` so Compose uses that local image. The build works on every supported architecture; on a 32-bit single-board computer it takes a while.
+- **Build it yourself.** Run `docker build -f dockerfile -t ghcr.io/rainyvalley/receiptmqtt:local .` in the repo, then put `IMAGE_TAG=local` in your `.env` so Compose uses that local image. The build works on every supported architecture; on a 32-bit single-board computer it takes a while.
 
 **3. Create `.env`** next to `docker-compose.yml`. **`MQTT_PASSWORD` and `ADMIN_PASS` are required.** Compose will not start without them.
 
@@ -101,7 +101,7 @@ docker run --name printmqttify_container -d \
   ghcr.io/rainyvalley/receiptmqtt:latest
 ```
 
-Put the settings in `.env` as above, not on the command line, so they stay out of your shell history. Plain `docker run` uses the program's own defaults for feeding and cutting (see `FEED_DIST` and `CUTTING` below), which differ from Compose.
+Put the settings in `.env` as above, not on the command line. Plain `docker run` uses the program's own defaults for feeding and cutting (see `FEED_DIST` and `CUTTING` below), which differ from Compose.
 
 ---
 
@@ -117,7 +117,7 @@ Paper width, the printer device, the broker login and the MQTT topic prefix can 
 |---|---|---|
 | `MQTT_BROKER` | `your-broker-ip` | Broker address. |
 | `MQTT_PORT` | `1883` | Broker port. 8883 is usual for TLS. A bad value falls back to 1883. |
-| `MQTT_USERNAME`, `MQTT_PASSWORD` | placeholder, required | Broker login. With no login the container still starts but logs a warning. |
+| `MQTT_USERNAME`, `MQTT_PASSWORD` | placeholder, required | Broker login. Compose requires `MQTT_PASSWORD`; a plain `docker run` starts without a login and logs a warning. |
 | `MQTT_TLS` | off | `1` turns on TLS to the broker, using the system CA list. |
 | `MQTT_TLS_CA` | system CAs | Path inside the container to a CA file, for a private CA. Mount it read-only. |
 | `MQTT_TLS_INSECURE` | off | Skip the broker name check. Lab use only. A warning is logged. |
@@ -133,7 +133,7 @@ Most installs only set `MQTT_TOPIC_PREFIX`. The single-topic variables are there
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `PRINTER_DEVICE` | `/dev/usb/lp1` | The printer's device file. The older name `PAPER_DEVICE` is used if `PRINTER_DEVICE` is not set. |
+| `PRINTER_DEVICE` | `/dev/usb/lp1` | The printer's device file. `PAPER_DEVICE` is accepted as an alias when `PRINTER_DEVICE` is not set. |
 | `PRINTER_NAME` | `ReceiptPrinter` | Name of the small monitoring queue the availability check looks at. It is not used for printing. |
 | `BOOT_RECEIPT` | `1` | Print a short "online" receipt after the first successful broker connect, so a boot is confirmed on paper. `0` turns the paper receipt off; the log still says the server is online. |
 | `FEED_DIST` | `0` with Compose, `2` with plain `docker run` | How many extra paper feeds after each receipt. Each is about 3 mm. |
@@ -184,7 +184,7 @@ A number that is not a whole number, or is too small, is ignored and the default
 
 ### Settings in the panel
 
-The panel can change these values, so a plain `docker run` install does not need a `.env` at all:
+The panel can change these values, so a plain `docker run` install can set them there instead of in a `.env` (`ADMIN_PASS` is still required at start):
 
 - paper width, extra feed length, printer device
 - MQTT broker, username and password
@@ -194,7 +194,7 @@ Paper width and the device take effect on the next print. A broker, login or top
 
 Values are stored in `/app/data/settings.json` inside the container. `docker-compose.yml` mounts a named volume there, so they survive `docker compose up -d` and `docker compose down`; `docker compose down -v` removes them. Without Compose, mount a directory at `/app/data` yourself.
 
-**The environment always wins.** If a variable is set and not empty in Compose or `.env`, the panel shows that field as "set in the environment" and cannot change it. That keeps an existing `.env` authoritative while the panel fills in everything else.
+**The environment always wins.** If a variable is set and not empty in Compose or `.env`, the panel shows that field as "set in the environment" and cannot change it. The panel fills in the rest.
 
 The saved file contains the MQTT password and is written mode 600, readable only by the app user. The panel shows it to the logged-in admin, like every other setting, so keep the panel on localhost or behind HTTPS. There is no separate panel password for settings; it uses `ADMIN_USER` / `ADMIN_PASS`.
 
@@ -215,9 +215,7 @@ Set **`PAPER_WIDTH_MM`** in `.env` (or in `docker-compose.yml`) and restart the 
 PAPER_WIDTH_MM=80
 ```
 
-The setting picks the print area as well, because a thermal head cannot reach
-the paper edges. A "58 mm" roll prints a 48 mm area, so it uses the same 384
-dots as 48 mm paper. An 80 mm roll prints 72 mm.
+The setting also picks the print area. A "58 mm" roll prints a 48 mm area, using the same 384 dots as 48 mm paper. An 80 mm roll prints 72 mm.
 
 | Value | Print area | Dots | Typical printer |
 |---|---|---|---|
@@ -371,7 +369,7 @@ CUPS runs inside the container only for the availability check. It listens on th
 
 ### Turn on HTTPS
 
-The panel serves HTTPS when you give it a certificate and key. Without them it stays plain HTTP, so existing installs keep working.
+The panel serves HTTPS when you give it a certificate and key. Without them it serves plain HTTP.
 
 **1. Make a certificate.** Run this on the host, in the folder with `docker-compose.yml`. Add your host name or IP after `certs` if you use one.
 
@@ -393,7 +391,7 @@ WEB_TLS_KEY=/certs/panel.key
 | You see | It means | Do this |
 |---|---|---|
 | Browser warns about the certificate | It is self-signed. | Accept it once, or import `panel.crt` into your browser. |
-| Container exits with "not readable by the app user" | The files are missing or private to root. | Check the mount path and that the files are readable (mode 644). |
+| Log says "not readable by the app user" | The files are missing or private to root. | Check the mount path and that the files are readable (mode 644); the panel falls back to plain HTTP. |
 | Log says "Using plain HTTP" | Only one of the two settings is set, or the cert or key file cannot be read. | Set both, and make the files readable by the app user. |
 
 With curl, add `--cacert certs/panel.crt`. The MQTT connection has its own TLS settings; see `MQTT_TLS` above.
@@ -445,7 +443,7 @@ The container publishes retained Home Assistant discovery configs on every MQTT 
 | Dropped jobs | sensor, total increasing | `printer/dropped_total` |
 | Failed jobs | sensor, total increasing | `printer/failed_total` |
 
-Entity ids are derived from the command topic (`printer/commands` becomes `receiptmqtt_printer_commands_*`), so two printers with different topics on one broker do not collide. Set `HA_DEVICE_NAME` per instance to give them distinct names in Home Assistant, and `HA_NODE_ID` if you want the prefix fixed (see the ACL note under [Two printers on two systems](#two-printers-on-two-systems)). `HA_DISCOVERY=0` turns discovery off; the topics keep working and you can add the entities by hand (see [Entity ids](#entity-ids)).
+The discovery id is derived from the command topic (`printer/commands` becomes `receiptmqtt_printer_commands_*`), so two printers with different topics on one broker do not collide; Home Assistant builds entity ids from the device and entity names (see [Entity ids](#entity-ids)). Set `HA_DEVICE_NAME` per instance to give them distinct names in Home Assistant, and `HA_NODE_ID` if you want the prefix fixed (see the ACL note under [Two printers on two systems](#two-printers-on-two-systems)). `HA_DISCOVERY=0` turns discovery off; the topics keep working and you can add the entities by hand (see [Entity ids](#entity-ids)).
 
 Changing the topic prefix in the panel moves the entity prefix on the next reconnect and clears the old retained availability and discovery configs, so Home Assistant does not keep showing the old entities.
 
@@ -620,8 +618,8 @@ The paper sensors go `unavailable` when the container is down or the printer's d
 
 This project wouldn't exist without the starting points these two gave it — huge thanks to both:
 
-- **[Aesgarth/PrintMQTTify](https://github.com/Aesgarth/PrintMQTTify)** — the original MQTT-to-CUPS print client this project grew out of. Released under Creative Commons Zero v1.0 (CC0-1.0). Thank you for the foundation.
-- **[klirichek/zj-58](https://github.com/klirichek/zj-58)** — the ZJ-58/ZJ-80 CUPS driver that got these printers working in the first place. The driver itself is no longer used here, but [`app/escpos.py`](./app/escpos.py) is a Python port of its ESC/POS output logic. Licensed BSD-2-Clause, © Aleksey N. Vinogradov (klirichek); the notice is kept in [`LICENSE.zj-58`](./LICENSE.zj-58). Thank you for reverse-engineering these printers.
+- **[Aesgarth/PrintMQTTify](https://github.com/Aesgarth/PrintMQTTify)** — an MQTT-to-CUPS print client, released under Creative Commons Zero v1.0 (CC0-1.0).
+- **[klirichek/zj-58](https://github.com/klirichek/zj-58)** — the ZJ-58/ZJ-80 CUPS driver; [`app/escpos.py`](./app/escpos.py) is a Python port of its ESC/POS output logic. Licensed BSD-2-Clause, © Aleksey N. Vinogradov (klirichek); the notice is kept in [`LICENSE.zj-58`](./LICENSE.zj-58). Thank you for reverse-engineering these printers.
 
 If you find this useful, please go star both repositories above.
 
@@ -631,10 +629,10 @@ If you find this useful, please go star both repositories above.
 
 ## A note on AI assistance
 
-Parts of this fork — code, configuration, and documentation — were written with the help of generative AI. Everything in here was reviewed, tested against real hardware, and corrected by a human before being committed; nothing was accepted on the model's say-so. The debugging that produced most of these changes is recorded in [`docs/hardware-notes.md`](./docs/hardware-notes.md).
+Parts of this fork — code, configuration, and documentation — were written with the help of generative AI. Everything in here was reviewed, tested against real hardware, and corrected by a human before being committed; nothing was accepted on the model's say-so. Hardware debugging notes are in [`docs/hardware-notes.md`](./docs/hardware-notes.md).
 
 ---
 
 ## License
 
-This project is BSD 2-Clause, © rosco@rosco.cloud; see [`LICENSE`](./LICENSE). The PrintMQTTify code it grew from is Creative Commons Zero v1.0 (CC0-1.0) and stays so upstream. The Python port of the ZJ-58/ZJ-80 ESC/POS output logic ([`app/escpos.py`](./app/escpos.py)) remains BSD-2-Clause, © Aleksey N. Vinogradov (klirichek), under the terms in [`LICENSE.zj-58`](./LICENSE.zj-58).
+This project is BSD 2-Clause, © rosco@rosco.cloud; see [`LICENSE`](./LICENSE). Upstream PrintMQTTify code is Creative Commons Zero v1.0 (CC0-1.0). The Python port of the ZJ-58/ZJ-80 ESC/POS output logic ([`app/escpos.py`](./app/escpos.py)) remains BSD-2-Clause, © Aleksey N. Vinogradov (klirichek), under the terms in [`LICENSE.zj-58`](./LICENSE.zj-58).
